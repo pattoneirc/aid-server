@@ -1005,6 +1005,26 @@ html[data-studio-free-theme] .studio-workspace--free .studio-node-shell.is-conne
   transform: translate(calc(-50% + 10px + var(--studio-connection-handle-right-x, 0px)), calc(-50% + var(--studio-connection-handle-right-y, 0px))) scale(1.18);
 }
 
+.studio-selection-connection {
+  position: absolute;
+  z-index: 18;
+  visibility: hidden;
+  pointer-events: none;
+}
+.studio-selection-connection .studio-node-handle {
+  top: 0 !important;
+  right: auto !important;
+  left: 0 !important;
+  touch-action: none;
+  cursor: crosshair;
+}
+.studio-selection-connection .studio-node-handle > span { opacity: 1; }
+.studio-selection-connection .studio-node-handle:is(:focus-visible, [aria-pressed=true]) > span {
+  outline: 2px solid var(--studio-edge-flow, #69a8ff);
+  outline-offset: 2px;
+}
+.studio-selection-connection-line:not([data-dragging]) { visibility: hidden; }
+
 .studio-status { display: inline-flex; align-items: center; gap: 4px; color: var(--studio-muted); font-size: 9px; white-space: nowrap; }
 .studio-status__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--studio-status-idle); }
 .studio-status--generating .studio-status__dot { background: var(--studio-accent); }

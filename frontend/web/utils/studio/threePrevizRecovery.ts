@@ -1,6 +1,7 @@
 import type { DirectorSceneData } from '@/types/studio'
 import { DIRECTOR_MANNEQUIN_ASSET_ID } from '@/config/directorMannequin'
 import { assistantDigest } from '@/utils/assistant/assistantRequestCoordinator'
+import { digestSha256Hex } from '@/utils/sha256'
 import { normalizeDirectorScene } from './directorScene'
 import type { ThreePrevizLocalRecord } from './threePrevizStorage'
 import { validateThreePrevizModeling } from './threePrevizDocument'
@@ -44,8 +45,7 @@ export async function threePrevizCanvasBase(scene: DirectorSceneData): Promise<s
     panoramaHistory: panoramaHistory?.map(resourceLocation)
   })
   if (!globalThis.crypto?.subtle) return 'canonical:' + content
-  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content))
-  return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')
+  return digestSha256Hex(new TextEncoder().encode(content))
 }
 
 interface ThreePrevizRecoveryDecision {

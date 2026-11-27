@@ -17,11 +17,12 @@ public final class CoreLocalStorageAreas implements LocalStorageAreaProvider {
             area(env,"aid.assistant.source.private-storage-root","assistant-source",profile.resolveSibling(".aid-private").resolve("assistant-source")),
             area(env,"canvas.publication.storage-root","canvas-publication",privateRoot.resolve("canvas-publication")),
             area(env,"log.archive.path","log-archive",Path.of("./log-archive").toAbsolutePath()),
+            area(env,"aid.model-request-log.directory","aid-model-request-logs",privateRoot.resolve("aid-model-request-logs")),
             area(env,"aid.error-rule-cache.directory","cache",home.resolve(".aid/cache")),
             area(env,"assistant.session-archive.directory","assistant-sessions",privateRoot.resolve("assistant-sessions")));
     }
     private Area area(Environment e,String property,String relative,Path fallback){
         String value=e.getProperty(property);return new Area(property,relative,value==null||value.isBlank()?fallback:Path.of(value).toAbsolutePath().normalize());
     }
-    public Set<String> dependentBeans(){return Set.of("tomcatServletWebServerFactory","multipartConfigElement","aidAppConfig","resourcesConfig","ossConfigManager","errorRuleCache","logArchiveServiceImpl","ffmpegRuntimeValidator","skillPackageDiskMirror","assistantReasoningArchive","nativeAssistantTurnArchive","privateAssistantSourceBlobStore","canvasPublicationFiles","canvasPublicationMediaStore","modelHealthArchiveServiceImpl","tokenDanceCatalogManager","assistantSessionDeletionService");}
+    public Set<String> dependentBeans(){return Set.of("tomcatServletWebServerFactory","multipartConfigElement","aidAppConfig","resourcesConfig","ossConfigManager","errorRuleCache","logArchiveServiceImpl","ffmpegRuntimeValidator","skillPackageDiskMirror","assistantReasoningArchive","nativeAssistantTurnArchive","privateAssistantSourceBlobStore","canvasPublicationFiles","canvasPublicationMediaStore","modelHealthArchiveServiceImpl","tokenDanceCatalogManager","assistantSessionDeletionService","modelRequestLogStore");}
 }

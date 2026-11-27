@@ -49,12 +49,14 @@ export function StudioComposerAttachmentStrip({
   refs,
   onInsert,
   onRemove,
+  showMention = true,
   issueForRef
 }: {
   upstream: StudioComposerThumbItem[]
   refs: StudioComposerRef[] | undefined
   onInsert: (ref: StudioComposerRef) => void
   onRemove: (ref: StudioComposerRef) => void
+  showMention?: boolean
   issueForRef?: (ref: Pick<StudioComposerRef, 'nodeId' | 'assetId' | 'kind' | 'mediaKind' | 'previewUrl'>) =>
     { resourceId: string; index: number; invalid: boolean } | undefined
 }) {
@@ -120,12 +122,12 @@ export function StudioComposerAttachmentStrip({
     <div className="studio-composer-attachment-strip" aria-label="引用附件">
       {upstream.map((item) => {
         const issue = issueForRef?.({ ...item, kind: 'node', mediaKind: item.mediaKind ?? 'image' })
-        return <StudioComposerThumb key={`up-${item.key}`}
+        return <StudioComposerThumb key={`up-${item.key}`} showMention={showMention}
           item={issue ? { ...item, index: issue.index, invalidResourceId: issue.invalid ? issue.resourceId : undefined } : item} />
       })}
       {items.map((item) => (
         item.type === 'thumb' ? (
-          <StudioComposerThumb key={item.key} item={item.thumb} showRemove />
+          <StudioComposerThumb key={item.key} item={item.thumb} showRemove showMention={showMention} />
         ) : (
           <StudioComposerReferenceCard
             key={item.key}
@@ -134,6 +136,7 @@ export function StudioComposerAttachmentStrip({
             summary={item.card.summary}
             mediaKind={item.card.mediaKind}
             index={item.card.index}
+            onInsert={showMention ? onInsert : undefined}
             onRemove={onRemove}
           />
         )

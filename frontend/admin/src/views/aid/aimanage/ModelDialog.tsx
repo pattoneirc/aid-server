@@ -62,7 +62,8 @@ export default function ModelDialog({ open, title, provider, data, onCancel, onO
         parseMaxConcurrency(next.scheduleStrategyJson))
     });
     form.resetFields();
-    form.setFieldsValue({ ...next, maxConcurrency: parseMaxConcurrency(next.scheduleStrategyJson) });
+    form.setFieldsValue({ ...next, dedicatedConnectionEnabled: next.dedicatedConnectionEnabled === true,
+      maxConcurrency: parseMaxConcurrency(next.scheduleStrategyJson) });
     setTab(data?.id ? 'capabilities' : 'basic');
   }, [open, data, form, manualNewApi]);
 
@@ -181,6 +182,23 @@ export default function ModelDialog({ open, title, provider, data, onCancel, onO
             <Col span={12}><Form.Item name="realModelCode" label="真实模型标识" rules={[{ required: true, whitespace: true }]} tooltip="填写原厂真实模型及版本标识。渠道 Endpoint ID、req_key 等路由信息在调用配置中维护。"><Input maxLength={255} placeholder="如：kling-3.0-omni" /></Form.Item></Col>
             </>}
             <Col span={24}><Form.Item name="logoUrl" label="模型图标" extra="可选。未上传时使用所属服务商图标；服务商也未上传时使用内置图标。"><ImageUpload maxCount={1} maxSize={5} accept="image/*" /></Form.Item>{!model.logoUrl && resolveProviderLogo(provider?.providerCode, provider?.logoUrl) && <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: -16, marginBottom: 12, color: '#64748b' }}><img src={resolveProviderLogo(provider?.providerCode, provider?.logoUrl)} width={24} height={24} alt="默认模型图标" style={{ objectFit: 'contain' }} />当前默认图标</div>}</Col>
+            <Col span={24}><Form.Item name="dedicatedConnectionEnabled" label="使用模型专属连接" valuePropName="checked"
+              tooltip="启用后使用本模型的基础地址和 API Key。">
+              <Switch />
+            </Form.Item></Col>
+            <Form.Item noStyle shouldUpdate={(previous, current) => previous.dedicatedConnectionEnabled !== current.dedicatedConnectionEnabled}>
+              {({ getFieldValue }) => getFieldValue('dedicatedConnectionEnabled') && <>
+                <Col span={24}><Form.Item name="dedicatedBaseUrl" label="基础地址（Base URL）"
+                  rules={[{ required: true, whitespace: true }]}>
+                  <Input maxLength={1024} placeholder="https://gateway.example.com" />
+                </Form.Item></Col>
+                <Col span={24}><Form.Item name="dedicatedApiKey" label="API Key"
+                  rules={[{ required: !data?.dedicatedConnectionRevision, whitespace: true }]}>
+                  <Input.Password maxLength={2048} autoComplete="new-password"
+                    placeholder={data?.dedicatedConnectionRevision ? '已配置，留空保留原 Key' : '输入模型专属 API Key'} />
+                </Form.Item></Col>
+              </>}
+            </Form.Item>
             <Col span={24}><Form.Item name="remark" label="备注"><Input.TextArea rows={2} /></Form.Item></Col>
           </Row>
         </div> },

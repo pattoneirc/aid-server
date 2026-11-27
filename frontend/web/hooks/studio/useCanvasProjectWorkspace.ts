@@ -1,5 +1,6 @@
 'use client'
 
+import { digestSha256Hex } from '@/utils/sha256'
 import { canvasResourceMatchesNodeMedia } from '@/utils/canvas/canvasCurrentResultResource'
 import {
   canvasDirectorSceneIds, clearCanvasDirectorCheckpoints, recoverCanvasDirectorScenes
@@ -1226,9 +1227,9 @@ export function useCanvasProjectWorkspace(
           sceneWrite
         })
         const operationId = adoption
-          ? 'adopt_' + Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
-            new TextEncoder().encode(JSON.stringify([adoption.sceneId, adoption.projectId, adoption.stepId])))),
-          byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 58)
+          ? 'adopt_' + (await digestSha256Hex(new TextEncoder().encode(
+            JSON.stringify([adoption.sceneId, adoption.projectId, adoption.stepId]),
+          ))).slice(0, 58)
           : saveRequestKeysRef.current.get(fingerprint) || canvasOperationId('mutate')
         saveRequestKeysRef.current.set(fingerprint, operationId)
         ownOperationIdsRef.current.add(operationId)

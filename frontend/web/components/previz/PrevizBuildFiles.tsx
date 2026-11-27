@@ -1,5 +1,6 @@
 "use client";
 
+import { digestSha256Hex } from "@/utils/sha256";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPrevizWorkspaceApi } from "@/utils/previz/remoteWorkspace";
 import { assistantErrorMessage } from "@/utils/assistant/assistantRequestCoordinator";
@@ -36,8 +37,7 @@ export function PrevizBuildFiles({ projectId, stepIds }: { projectId: string; st
     try {
       const blob = await api.nativeFile(projectId, file.stepId);
       if (!(blob instanceof Blob) || blob.size !== file.sizeBytes) throw new Error("工程文件下载不完整，请重试");
-      const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())))
-        .map(value => value.toString(16).padStart(2, "0")).join("");
+      const digest = await digestSha256Hex(await blob.arrayBuffer());
       if (digest !== file.sha256) throw new Error("工程文件校验失败，请重试");
       if (!alive.current) return;
       downloadPreviz(blob, file.name);

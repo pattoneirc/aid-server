@@ -40,6 +40,10 @@ public interface IAiModelConfigService {
     }
 
     /** 已建任务按原模型记录解析凭证，模型停用不取消原任务的查询。 */
+    default AiModelConfigVo selectDedicatedTaskCredentials(Long modelId, String modelCode, Long revision) {
+        return null;
+    }
+
     default AiModelConfigVo selectTaskCredentials(Long modelId, String modelCode, Long userId) {
         return selectByModelCodeForUser(modelCode, userId);
     }

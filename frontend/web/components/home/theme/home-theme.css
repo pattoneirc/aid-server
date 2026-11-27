@@ -22,8 +22,8 @@ html.layout-home-new:has([data-home-canvas-composer]) {
   --home-text: #ecedef;
   --home-text-2: #9a9da5;
   --home-text-3: #62656d;
-  --home-brand: #4ae7fd;
-  --home-brand-dim: rgba(74, 231, 253, 0.14);
+  --home-brand: #90c4e5;
+  --home-brand-dim: rgba(255, 255, 255, 0.1);
   --home-inverse: #ecedef;
   --home-on-inverse: #0e0f11;
   --home-dot: #ffffff;
@@ -64,8 +64,8 @@ html.layout-home-new[data-v10-theme='paper']:has([data-home-canvas-composer]) {
   --home-text: #252b31;
   --home-text-2: #515e6a;
   --home-text-3: #596874;
-  --home-brand: #007589;
-  --home-brand-dim: #e3f2f5;
+  --home-brand: #1f78b4;
+  --home-brand-dim: #e6e9ec;
   --home-inverse: #252b31;
   --home-on-inverse: #ffffff;
   --home-dot: #aebdc8;
@@ -78,9 +78,9 @@ html.layout-home-new[data-v10-theme='paper']:has([data-home-canvas-composer]) {
   --home-spot-core: rgba(0,126,148,.23);
   --home-spot-mid: rgba(0,126,148,.06);
   /* 白底上透明霓虹会发灰，流动描边直接用品牌色的实色层次 */
-  --home-orbit-dim: color-mix(in srgb, var(--home-brand) 42%, transparent);
-  --home-orbit-mid: color-mix(in srgb, var(--home-brand) 78%, transparent);
-  --home-orbit-hot: var(--home-brand);
+  --home-orbit-dim: color-mix(in srgb, #007589 42%, transparent);
+  --home-orbit-mid: color-mix(in srgb, #007589 78%, transparent);
+  --home-orbit-hot: #007589;
   --home-orbit-opacity: 1;
   --home-shadow: rgba(30,50,68,.15);
   --home-scrollbar: #c9d1d7;

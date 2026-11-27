@@ -58,6 +58,8 @@ import { StudioCanvasToolbar } from './StudioCanvasToolbar'
 import { StudioGroupCard } from './StudioGroupCard'
 import { StudioEnergyConnectionLine, StudioEnergyEdge } from './StudioEnergyEdge'
 import { StudioPendingConnectionLine } from './StudioPendingConnectionLine'
+import { StudioSelectionConnection, type StudioSelectionConnectionHandle } from './StudioSelectionConnection'
+import { STUDIO_CONNECTION_RADIUS_PX } from '@/utils/studio/studioConnectionHandle'
 import { StudioNodeAgentDock, type StudioNodeAgentDockHandle } from './StudioNodeAgentDock'
 import { useStudioAudioEditor } from '@/stores/studioAudioEditor'
 import { StudioNodeCard } from './StudioNodeCard'
@@ -246,6 +248,7 @@ function StudioCanvasInner({
   const canvasRectRef = useRef<ReturnType<typeof rectFromDom> | null>(null)
   const agentDockRef = useRef<StudioNodeAgentDockHandle>(null)
   const audioEditorKey = useStudioAudioEditor((state) => state.session ? `${state.session.scopeKey}:${state.session.sourceNodeId}:${state.session.operation}` : '')
+  const selectionConnectionRef = useRef<StudioSelectionConnectionHandle>(null)
   const selectionToolbarRef = useRef<StudioSelectionToolbarHandle>(null)
   const groupToolbarRef = useRef<StudioGroupToolbarHandle>(null)
   const mediaToolbarRef = useRef<StudioNodeMediaToolbarHandle>(null)
@@ -580,6 +583,7 @@ function StudioCanvasInner({
       }
     })()
     const selectionInCanvas = measuredSelection ?? fallbackSelection
+    if (selectionInCanvas) selectionConnectionRef.current?.reposition(selectionInCanvas)
     const activeOverlayNode = agentDockAnchorNodeId
       ? overlayNodes.find((node) => node.id === agentDockAnchorNodeId)
         ?? nodes.find((node) => node.id === agentDockAnchorNodeId)
@@ -939,6 +943,23 @@ function StudioCanvasInner({
     }
     setFloatingMenu(null)
   }, [addConnection, edgeKind, readOnly])
+
+  const connectSelection = useCallback((sources: readonly string[], target: string) => {
+    const state = useStudioUiStore.getState()
+    const reason = state.addUserConnections(sources, target)
+    if (reason) message.warning(reason)
+  }, [])
+
+  const startSelectionConnectionMotion = useCallback((sources: readonly string[]) => {
+    connectionMotionRef.current?.start(sources)
+  }, [])
+
+  const resolveOverviewConnectionTarget = useCallback((point: XYPosition) =>
+    lodLayerRef.current?.connectionTargetAt(point) ?? null, [])
+
+  const stopSelectionConnectionMotion = useCallback(() => {
+    connectionMotionRef.current?.stop()
+  }, [])
 
   const isValidConnection = useCallback((connection: Pick<Connection, 'source' | 'target'>) => {
     if (readOnly || !connection.source || connection.source === connection.target) return false
@@ -1923,7 +1944,7 @@ function StudioCanvasInner({
         zoomOnDoubleClick={false}
         nodeDragThreshold={4}
         connectionMode={ConnectionMode.Strict}
-        connectionRadius={28}
+        connectionRadius={STUDIO_CONNECTION_RADIUS_PX}
         nodesDraggable={!readOnly && !expandZoomLocked}
         nodesConnectable={!readOnly && !expandZoomLocked}
         edgesReconnectable={!readOnly && !expandZoomLocked}
@@ -2128,6 +2149,18 @@ function StudioCanvasInner({
         <StudioLayerComposeChrome ref={layerComposeChromeRef} />
       ) : null}
       {!readOnly ? <StudioEditorSourceGuard /> : null}
+      {studioMode === 'free' && !readOnly && !expandZoomLocked
+        && (selectionChrome === 'multiSelect' || selectionChrome === 'group') ? (
+          <StudioSelectionConnection
+            key={JSON.stringify(selectedNodeIds)}
+            ref={selectionConnectionRef}
+            sources={selectedNodeIds}
+            onConnect={connectSelection}
+            resolveOverviewTarget={showOverview ? resolveOverviewConnectionTarget : undefined}
+            onDragStart={startSelectionConnectionMotion}
+            onDragEnd={stopSelectionConnectionMotion}
+          />
+        ) : null}
       {!readOnly && selectionChrome === 'multiSelect' ? (
         <StudioSelectionToolbar ref={selectionToolbarRef} />
       ) : null}

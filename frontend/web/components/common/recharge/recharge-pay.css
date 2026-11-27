@@ -47,7 +47,7 @@
   border-color: color-mix(in srgb, var(--recharge-accent) 60%, var(--recharge-line));
 }
 .recharge-pay-method[aria-pressed='true'] {
-  background: color-mix(in srgb, var(--recharge-accent) 9%, var(--recharge-control));
+  background: color-mix(in srgb, var(--recharge-text) 6%, var(--recharge-control));
 }
 .recharge-pay-method__icon { flex: 0 0 22px; display: block; }
 

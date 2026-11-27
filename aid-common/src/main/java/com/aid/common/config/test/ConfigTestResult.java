@@ -23,6 +23,23 @@ public class ConfigTestResult {
      */
     private String details;
 
+    /** Actual text from a short model availability test. */
+    private String outputText;
+
+    private String mediaStatus;
+
+    private String mediaType;
+
+    private String mediaUrl;
+
+    private String confirmationToken;
+
+    private String testRunId;
+
+    private String testSpec;
+
+    private java.math.BigDecimal estimatedCredits;
+
     /**
      * 耗时（毫秒）。
      */

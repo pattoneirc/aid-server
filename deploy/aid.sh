@@ -7912,7 +7912,8 @@ confirm_reinstall() { # confirm_reinstall <目标模式 docker|manual>
     warn "两种部署方式并存会产生端口冲突（80/8080/3306），请先停掉原部署（菜单 6）再切换方式"
   fi
   local goOn
-  goOn="$(ask_yes_no '确认继续？' 'n')"
+  goOn="$(ask_yes_no '确认继续？' 'n')" \
+    || die "未收到重装确认，未执行部署。请使用交互式终端重试。"
   [[ "${goOn}" == "y" ]] || { log "已取消"; return 1; }
   return 0
 }

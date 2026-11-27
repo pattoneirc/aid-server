@@ -1,5 +1,6 @@
 "use client";
 
+import { digestSha256Hex } from "@/utils/sha256";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { App, Button, Modal } from "antd";
 import {
@@ -739,7 +740,7 @@ export function PrevizAuthoring({
                       for (const stepId of buildSteps) { manifests.push(await api.buildManifest(projectId, stepId)); assertCurrent(); }
                       const updated = [...before.assets];
                       for (const asset of missing) {
-                        const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", dataUrlBytes(asset.dataUrl))), value => value.toString(16).padStart(2,"0")).join("");
+                        const hash = await digestSha256Hex(dataUrlBytes(asset.dataUrl));
                         const matches = manifests.filter(item => item.artifact.sha256 === hash);
                         if (matches.length === 1) {
                           const match = matches[0];

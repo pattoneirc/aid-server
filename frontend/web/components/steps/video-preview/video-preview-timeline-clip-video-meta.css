@@ -19,7 +19,7 @@
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: var(--ui-brand, #4ae7fd);
+  color: var(--ui-brand, #90c4e5);
 }
 
 .video-preview-step .track-clip-video .clip-text {
@@ -56,9 +56,9 @@
   align-items: center;
   gap: 3PX;
   padding: var(--vp-clip-edit-pad-y) var(--vp-clip-edit-pad-x);
-  border: 1px solid var(--ui-hair, rgba(74, 231, 253, 0.45));
+  border: 1px solid var(--ui-hair, rgba(144, 196, 229, 0.45));
   border-radius: 6PX;
-  background: var(--ui-soft, rgba(74, 231, 253, 0.16));
+  background: var(--ui-soft, rgba(144, 196, 229, 0.16));
   color: var(--ui-text, #e8fbff);
   font-size: var(--vp-clip-edit-font);
   font-weight: 500;
@@ -70,8 +70,8 @@
 }
 
 .video-preview-step .clip-edit-btn:hover {
-  background: var(--ui-raised, rgba(74, 231, 253, 0.28));
-  border-color: var(--ui-ring, rgba(74, 231, 253, 0.75));
+  background: var(--ui-raised, rgba(144, 196, 229, 0.28));
+  border-color: var(--ui-ring, rgba(144, 196, 229, 0.75));
 }
 
 .video-preview-step .clip-edit-btn:active {
@@ -142,8 +142,8 @@
   position: absolute;
   top: 4px;
   bottom: 4px;
-  background: var(--ui-raised, rgba(74, 231, 253, 0.25));
-  border: 1px dashed var(--ui-hair, rgba(74, 231, 253, 0.85));
+  background: var(--ui-raised, rgba(144, 196, 229, 0.25));
+  border: 1px dashed var(--ui-hair, rgba(144, 196, 229, 0.85));
 }
 
 .video-preview-step .snap-indicator {
@@ -151,7 +151,7 @@
   top: 0;
   bottom: 0;
   width: 1px;
-  background: #4ae7fd;
+  background: #90c4e5;
   pointer-events: none;
   z-index: 3;
 }

@@ -5,6 +5,7 @@ import { createNode, createProject, validateScene, resizeDuration, applyCommands
 import { getDirectorMotionEnd, normalizeDirectorTimeline } from './directorTimeline'
 import { removeDirectorObjects } from './directorScene'
 import { editorSceneDigest } from '@/utils/previz/editorSnapshot'
+import { digestSha256Hex } from '@/utils/sha256'
 import { PREVIZ_DIRECTOR_VIEW_ID } from '@/utils/previz/nativeCameras'
 import { listDirectorAuthoredCameras, resolveDirectorActiveCameraId } from '@/components/studio/director/directorCameraState'
 
@@ -232,5 +233,5 @@ export async function threePrevizHistoryFingerprint(scene: DirectorSceneData): P
   const graph = await editorSceneDigest(projectThreePreviz(scene).scene)
   const { modeling: _modeling, updatedAt: _time, revision: _revision, spaceGenJob: _job, ...director } = scene
   const data = new TextEncoder().encode(JSON.stringify([graph, director]))
-  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data)), byte => byte.toString(16).padStart(2, '0')).join('')
+  return digestSha256Hex(data)
 }

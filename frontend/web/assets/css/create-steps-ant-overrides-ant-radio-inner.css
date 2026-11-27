@@ -63,7 +63,8 @@ html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-moda
   color: var(--ui-text, #e6edf3) !important;
 }
 
-html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body *:not(img):not(video):not(canvas):not(input):not(textarea):not(select) {
+/* 正文兜底字色不要盖到按钮/链接：购买等自带 ink 的控件会被这条规则洗成白字。 */
+html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body *:not(img):not(video):not(canvas):not(input):not(textarea):not(select):not(button):not(a):not(:is(button *, a *)) {
   color: var(--ui-text, #e6edf3);
 }
 
@@ -79,6 +80,16 @@ html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-moda
 html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body .ant-btn-primary,
 html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body .ant-btn-primary * {
   color: var(--ui-on-primary, #fff);
+}
+
+html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body .recharge-package__buy,
+html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body .recharge-package__buy * {
+  color: var(--recharge-action-ink, var(--ui-on-primary, #111215));
+}
+
+html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body .recharge-package__buy:disabled:not([aria-busy='true']),
+html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body .recharge-package__buy:disabled:not([aria-busy='true']) * {
+  color: var(--recharge-muted, var(--ui-muted, #8e97a5));
 }
 
 html:where(:not([data-studio-free-theme])).app-shell-create .ant-modal .ant-modal-body .ant-btn-link,

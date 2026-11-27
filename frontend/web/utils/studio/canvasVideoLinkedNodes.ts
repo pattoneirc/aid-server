@@ -36,12 +36,16 @@ type CanvasVideoReferenceInput = {
  */
 export function canvasVideoLinkedRefs(input: CanvasVideoReferenceInput): StudioComposerRef[] {
   const own = (input.node.data.composerRefs ?? []).map(ref => ({ ...ref }))
-  // Reclassify links saved before style covers became display-only.
+  // Resolve legacy attachments against their source, including video nodes
+  // saved before mediaKind was recorded on empty nodes.
   const byId = new Map((input.nodes ?? []).map((node) => [node.id, node]))
   for (const ref of own) {
-    if (ref.nodeId && byId.get(ref.nodeId)?.data.kind === 'style_library') {
+    const sourceKind = ref.nodeId ? byId.get(ref.nodeId)?.data.kind : undefined
+    if (sourceKind === 'style_library') {
       ref.kind = 'library'
       ref.mediaKind = 'text'
+    } else if (sourceKind === 'video') {
+      ref.mediaKind = 'video'
     }
   }
   if (!input.edges?.length) return own

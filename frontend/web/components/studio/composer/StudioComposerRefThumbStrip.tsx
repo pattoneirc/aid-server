@@ -11,6 +11,7 @@ import {
   placeStudioThumbPreview
 } from '@/utils/studio/studioComposerThumbPreview'
 import { StudioCanvasTooltip } from '@/components/studio/canvas/StudioCanvasTooltip'
+import { StudioComposerReferenceMentionButton } from './StudioComposerReferenceMentionButton'
 
 export type StudioComposerThumbItem = {
   key: string
@@ -65,10 +66,12 @@ function useNaturalMediaSize(url: string, mediaKind: StudioMediaKind | undefined
 
 function Thumb({
   item,
-  showRemove
+  showRemove,
+  showMention
 }: {
   item: StudioComposerThumbItem
   showRemove?: boolean
+  showMention?: boolean
 }) {
   const [hover, setHover] = useState(false)
   const [rect, setRect] = useState<DOMRect | null>(null)
@@ -153,6 +156,17 @@ function Thumb({
           <CloseOutlined />
         </button>
       ) : null}
+      {showMention ? (
+        <StudioComposerReferenceMentionButton
+          title={item.title}
+          onInsert={() => {
+            if (clickTimer.current) window.clearTimeout(clickTimer.current)
+            if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+            setHover(false)
+            item.onInsert()
+          }}
+        />
+      ) : null}
       {hover && previewSize && previewPos && typeof document !== 'undefined'
         ? createPortal(
           <div
@@ -194,12 +208,14 @@ function Thumb({
 
 export function StudioComposerThumb({
   item,
-  showRemove
+  showRemove,
+  showMention
 }: {
   item: StudioComposerThumbItem
   showRemove?: boolean
+  showMention?: boolean
 }) {
-  return <Thumb item={item} showRemove={showRemove} />
+  return <Thumb item={item} showRemove={showRemove} showMention={showMention} />
 }
 
 export function StudioComposerRefThumbStrip({

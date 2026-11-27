@@ -78,7 +78,8 @@ public class NewApiClient {
             if (body == null) builder.GET();
             else builder.header("Content-Type", "application/json").POST(
                     HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body), StandardCharsets.UTF_8));
-            HttpResponse<InputStream> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+            HttpResponse<InputStream> response = com.aid.model.requestlog.ModelRequestLogCapture.send(
+                    http, builder.build(), HttpResponse.BodyHandlers.ofInputStream());
             try (InputStream stream = response.body()) {
                 if (optionalPricing && (response.statusCode() == 403 || response.statusCode() == 404)) {
                     log.info("New API price catalog unavailable; using configured default, providerId={}, status={}",

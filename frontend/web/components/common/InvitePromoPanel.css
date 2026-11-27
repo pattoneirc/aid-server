@@ -19,7 +19,7 @@
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--v10-brand) 13%, var(--v10-s2));
+  background: color-mix(in srgb, var(--v10-text) 8%, var(--v10-s2));
   color: var(--v10-brand);
   font-size: 18px;
 }

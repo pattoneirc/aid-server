@@ -205,6 +205,7 @@ interface StudioUiState {
   ) => { videoNodeId: string; audioNodeId: string } | null
   addConnection: (connection: Connection, kind?: StudioEdgeKind) => void
   addUserConnection: (connection: Connection, kind?: StudioEdgeKind) => string | undefined
+  addUserConnections: (sourceIds: readonly string[], targetId: string, kind?: StudioEdgeKind) => string | undefined
   applyNodeChanges: (changes: NodeChange<StudioCanvasNode>[]) => void
   commitNodePositions: (positions: Array<{ id: string; position: XYPosition }>) => void
   applyEdgeChanges: (changes: EdgeChange<StudioFlowEdge>[]) => void
@@ -382,6 +383,63 @@ function withRecordedSnapshot(
     diagnostics: [],
     selectedDiagnosticIds: [],
     dirtyRevision: state.dirtyRevision + 1
+  }
+}
+
+/** Plan all links against the same draft before publishing one undoable change. */
+function planStudioConnections(
+  state: StudioUiState,
+  connections: readonly Connection[],
+  kind: StudioEdgeKind,
+  manual: boolean
+): { snapshot?: StudioWorkspaceSnapshot; reason?: string } {
+  const nodesById = new Map(state.nodes.map(node => [node.id, node]))
+  const changedNodes = new Map<string, StudioCanvasNode>()
+  let edges = state.edges
+  const incomingByTarget = new Map<string, Set<string>>()
+  for (const connection of connections) {
+    const source = nodesById.get(connection.source)
+    const target = nodesById.get(connection.target)
+    if (!source || !target) return { reason: manual && connections.length > 1 ? '节点已不存在，请重新选择' : undefined }
+    if (source.id === target.id) return { reason: manual && connections.length > 1 ? '请选择框选范围外的目标节点' : undefined }
+    if (manual) {
+      const reason = studioManualNodeConnectionDisabledReason(source, target, {
+        studioMode: state.studioMode,
+        nodes: state.nodes,
+        edges
+      })
+      if (reason) return { reason }
+    }
+    if (!canConnectStudioNodes(source.data.kind, target.data.kind)) return {}
+    if (target.data.kind === 'smart_edit' && !isSmartEditSourceCandidate(target.id, source)) {
+      return { reason: manual && connections.length > 1 ? '剪辑成片无法引用所选节点' : undefined }
+    }
+
+    let incoming = incomingByTarget.get(target.id)
+    if (!incoming) {
+      incoming = new Set(state.edges.filter(edge => edge.target === target.id).map(edge => edge.source))
+      incomingByTarget.set(target.id, incoming)
+    }
+    const nextTargetData = applyStudioConnectionReference(source, target)
+    if (nextTargetData) {
+      const updated = { ...target, data: nextTargetData }
+      nodesById.set(target.id, updated)
+      changedNodes.set(target.id, updated)
+    }
+    if (!incoming.has(source.id)) {
+      incoming.add(source.id)
+      if (edges === state.edges) edges = [...edges]
+      edges.push(createStudioEdge(source.id, target.id, target.data.kind === 'smart_edit' ? 'reference' : kind, connection))
+    }
+  }
+  if (!changedNodes.size && edges === state.edges) return {}
+  return {
+    snapshot: {
+      nodes: changedNodes.size ? state.nodes.map(node => changedNodes.get(node.id) ?? node) : state.nodes,
+      edges,
+      zones: state.zones,
+      groups: state.groups
+    }
   }
 }
 
@@ -867,45 +925,25 @@ export const useStudioUiStore = create<StudioUiState>((set, get) => guardStudioR
 
   addUserConnection: (connection, kind) => {
     const state = get()
-    const source = state.nodes.find(node => node.id === connection.source)
-    const target = state.nodes.find(node => node.id === connection.target)
-    if (!source || !target) return
-    const reason = studioManualNodeConnectionDisabledReason(source, target, state)
-    if (reason) return reason
-    get().addConnection(connection, kind)
+    const { snapshot, reason } = planStudioConnections(state, [connection], kind ?? state.edgeKind, true)
+    if (snapshot) set(withRecordedSnapshot(state, snapshot))
+    return reason
+  },
+
+  addUserConnections: (sourceIds, targetId, kind) => {
+    const state = get()
+    const connections = [...new Set(sourceIds)].map(source => ({
+      source, target: targetId, sourceHandle: null, targetHandle: null
+    }))
+    const { snapshot, reason } = planStudioConnections(state, connections, kind ?? state.edgeKind, true)
+    if (snapshot) set(withRecordedSnapshot(state, snapshot))
+    return reason
   },
 
   addConnection: (connection, kind) => {
-    if (!connection.source || !connection.target || connection.source === connection.target) return
     const state = get()
-    const source = state.nodes.find((node) => node.id === connection.source)
-    const target = state.nodes.find((node) => node.id === connection.target)
-    if (!source || !target || !canConnectStudioNodes(source.data.kind, target.data.kind)) return
-    if (target.data.kind === 'smart_edit' && !isSmartEditSourceCandidate(target.id, source)) return
-    const duplicate = state.edges.some(
-      (edge) => edge.source === connection.source && edge.target === connection.target
-    )
-    const nextTargetData = applyStudioConnectionReference(source, target)
-    if (duplicate) {
-      if (!nextTargetData) return
-      set(withRecordedSnapshot(state, {
-        nodes: state.nodes.map((node) => node.id !== target.id ? node : { ...node, data: nextTargetData }),
-        edges: state.edges,
-        zones: state.zones,
-        groups: state.groups
-      }))
-      return
-    }
-    const edge = createStudioEdge(connection.source, connection.target, target.data.kind === 'smart_edit' ? 'reference' : kind ?? state.edgeKind, connection)
-    const nodes = nextTargetData
-      ? state.nodes.map((node) => node.id !== target.id ? node : { ...node, data: nextTargetData })
-      : state.nodes
-    set(withRecordedSnapshot(state, {
-      nodes,
-      edges: [...state.edges, edge],
-      zones: state.zones,
-      groups: state.groups
-    }))
+    const { snapshot } = planStudioConnections(state, [connection], kind ?? state.edgeKind, false)
+    if (snapshot) set(withRecordedSnapshot(state, snapshot))
   },
 
   applyNodeChanges: (changes) => {

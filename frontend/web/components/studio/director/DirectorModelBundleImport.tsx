@@ -1,5 +1,6 @@
 'use client'
 
+import { digestSha256Hex } from '@/utils/sha256'
 import { useEffect, useRef, useState } from 'react'
 import { canvasQuoteIdentity } from '@/utils/canvas/canvasQuote'
 import { Button, Modal } from 'antd'
@@ -84,16 +85,8 @@ export function DirectorModelBundleImport({
         throw new Error('模型最多256份文件，单文件64MiB，整包256MiB')
       const hashes = []
       for (const item of files) {
-        const hash = await crypto.subtle.digest(
-          'SHA-256',
-          await item.file.arrayBuffer(),
-        )
-        hashes.push([
-          item.path,
-          Array.from(new Uint8Array(hash))
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join(''),
-        ])
+        const hash = await digestSha256Hex(await item.file.arrayBuffer())
+        hashes.push([item.path, hash])
       }
       if (!current()) throw new Error('画布已切换')
       const fingerprint = JSON.stringify([workspaceId, rootPath, hashes]),

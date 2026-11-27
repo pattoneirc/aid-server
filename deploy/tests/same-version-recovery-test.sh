@@ -135,4 +135,23 @@ reset_trace
 do_update
 assert_trace $'updater-binary-first\nupdater-start-first:docker\nmanagement-command\nrestart-with-preflight\nstate:DEPLOY_MODE=docker\nstate:DATA_ROOT='"${DATA_ROOT}"$'\nstate:CURRENT_VERSION=1.0.0-beta.2\nstate:RELEASE_CHANNEL=beta\nmanagement-command\naccess-info'
 
+begin_deployment_work() { exit 23; }
+for mode in docker manual; do
+  detect_mode() { echo "${mode}"; }
+  ask_yes_no() { return 1; }
+  if output="$("do_install_${mode}" 2>&1)"; then
+    echo "FAIL: ${mode} reinstall with unavailable confirmation reported success" >&2
+    exit 1
+  fi
+  [[ "${output}" == *'未收到重装确认'* ]]
+
+  ask_yes_no() { echo n; }
+  "do_install_${mode}" >/dev/null 2>&1
+
+  ask_yes_no() { echo y; }
+  status=0
+  "do_install_${mode}" >/dev/null 2>&1 || status="$?"
+  [[ "${status}" -eq 23 ]]
+done
+
 echo 'same-version recovery tests passed'

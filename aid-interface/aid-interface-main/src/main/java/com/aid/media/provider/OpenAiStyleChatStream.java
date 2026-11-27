@@ -64,7 +64,7 @@ public final class OpenAiStyleChatStream {
     static HttpResponse<Object> openEventResponse(String url, String apiKey, String authHeader,
             String authPrefix, Map<String, String> extraHeaders, String body) throws IOException {
         try {
-            return SHARED_HTTP_CLIENT.send(buildJsonRequest(url, apiKey, authHeader, authPrefix,
+            return com.aid.model.requestlog.ModelRequestLogCapture.send(SHARED_HTTP_CLIENT, buildJsonRequest(url, apiKey, authHeader, authPrefix,
                     extraHeaders, body, true),
                     BoundedResponseBody.inputStreamOrError(MAX_ERROR_BODY_BYTES));
         } catch (InterruptedException interrupted) {

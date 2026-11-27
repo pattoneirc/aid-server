@@ -61,6 +61,26 @@ public final class TextExecutionTransportScope implements AutoCloseable {
 
     public static <T> HttpResponse<T> send(HttpClient client, HttpRequest request,
             HttpResponse.BodyHandler<T> handler) throws IOException, InterruptedException {
+        var exchange = com.aid.model.requestlog.ModelRequestLogCapture.begin(request);
+        if (exchange == null) return sendOwned(client, request, handler);
+        HttpRequest sampledRequest;
+        HttpResponse.BodyHandler<T> sampledHandler;
+        try {
+            sampledRequest = exchange.wrap(request);
+            sampledHandler = exchange.watch(handler);
+        } catch (RuntimeException instrumentationFailure) {
+            return sendOwned(client, request, handler);
+        }
+        try {
+            return sendOwned(client, sampledRequest, sampledHandler);
+        } catch (IOException | InterruptedException | RuntimeException failure) {
+            exchange.failure(failure);
+            throw failure;
+        }
+    }
+
+    private static <T> HttpResponse<T> sendOwned(HttpClient client, HttpRequest request,
+            HttpResponse.BodyHandler<T> handler) throws IOException, InterruptedException {
         var scope = CURRENT.get();
         if (scope == null) return client.send(request, handler);
         // Register and start under the same lock so cancellation cannot precede a new send.

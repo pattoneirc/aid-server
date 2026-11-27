@@ -266,7 +266,7 @@ public class AidAiModelController extends BaseController
      * 新增AI底层模型配置与算力计费
      */
     @PreAuthorize("@ss.hasPermi('aid:aidmodel:add')")
-    @Log(title = "AI底层模型配置与算力计费", businessType = BusinessType.INSERT)
+    @Log(title = "AI底层模型配置与算力计费", businessType = BusinessType.INSERT, excludeParamNames = "dedicatedApiKey")
     @PostMapping
     public AjaxResult add(@RequestBody AidAiModel aidAiModel)
     {
@@ -287,7 +287,7 @@ public class AidAiModelController extends BaseController
      * 修改AI底层模型配置与算力计费
      */
     @PreAuthorize("@ss.hasPermi('aid:aidmodel:edit')")
-    @Log(title = "AI底层模型配置与算力计费", businessType = BusinessType.UPDATE)
+    @Log(title = "AI底层模型配置与算力计费", businessType = BusinessType.UPDATE, excludeParamNames = "dedicatedApiKey")
     @PutMapping
     public AjaxResult edit(@RequestBody AidAiModel aidAiModel)
     {

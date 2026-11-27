@@ -9,6 +9,14 @@ export interface ConfigTestResult {
   message: string;
   /** 详细信息（仅超管可见，可能为 null） */
   details?: string | null;
+  outputText?: string | null;
+  mediaStatus?: 'confirmation' | 'running' | 'complete' | 'failed';
+  mediaType?: 'image' | 'video';
+  mediaUrl?: string | null;
+  confirmationToken?: string;
+  testRunId?: string;
+  testSpec?: string;
+  estimatedCredits?: number;
   /** 耗时（毫秒） */
   elapsedMs: number;
   /** 实际命中的厂商，可空 */

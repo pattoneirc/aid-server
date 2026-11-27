@@ -6,7 +6,7 @@
   flex: 0 0 auto;
   position: relative;
   background: var(--ui-surface, linear-gradient(180deg, rgba(18, 24, 38, 0.98) 0%, rgba(12, 16, 26, 0.98) 100%));
-  border: 1px solid var(--ui-hair, rgba(74, 231, 253, 0.12));
+  border: 1px solid var(--ui-hair, rgba(144, 196, 229, 0.12));
   border-radius: var(--radius-md);
   overflow-x: auto;
   overflow-y: hidden;
@@ -191,18 +191,18 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: linear-gradient(180deg, rgba(74, 231, 253, 0.54), rgba(59, 130, 246, 0.32));
+  background: linear-gradient(180deg, rgba(144, 196, 229, 0.54), rgba(59, 130, 246, 0.32));
   transition: height 0.08s ease, background 0.18s ease;
   pointer-events: none;
 }
 
 .video-preview-step .volume-bar-segment-active .volume-bar-shell {
-  border-color: rgba(74, 231, 253, 0.18);
+  border-color: rgba(144, 196, 229, 0.18);
 }
 
 .video-preview-step .volume-bar-segment-active .volume-bar-fill,
 .video-preview-step .volume-bar-fill-dragging {
-  background: linear-gradient(180deg, rgba(74, 231, 253, 0.48), rgba(59, 130, 246, 0.34));
+  background: linear-gradient(180deg, rgba(144, 196, 229, 0.48), rgba(59, 130, 246, 0.34));
 }
 
 .video-preview-step .volume-bar-fill-dragging {

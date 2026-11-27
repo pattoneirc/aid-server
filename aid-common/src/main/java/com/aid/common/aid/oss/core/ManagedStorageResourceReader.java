@@ -46,7 +46,7 @@ public class ManagedStorageResourceReader {
             OssProperties properties = config.getOssProperties();
             String mode = properties == null || properties.getUploadMode() == null ? ""
                     : properties.getUploadMode().toLowerCase(Locale.ROOT);
-            List<ReadStrategy> strategies = List.of(new LocalReadStrategy(), new ObjectStorageReadStrategy());
+            List<ReadStrategy> strategies = List.of(new LocalReadStrategy(properties), new ObjectStorageReadStrategy());
             for (ReadStrategy strategy : strategies)
                 if (strategy.supports(mode)) return strategy.read(locator, maxBytes, timeoutMs);
             return Content.failure(null, "STORAGE_MODE_UNSUPPORTED");
@@ -58,12 +58,25 @@ public class ManagedStorageResourceReader {
     }
 
     private final class LocalReadStrategy implements ReadStrategy {
+        private final OssProperties properties;
+
+        private LocalReadStrategy(OssProperties properties) {
+            this.properties = properties;
+        }
+
         @Override public boolean supports(String mode) { return "local".equals(mode); }
         @Override public Content read(String locator, int maxBytes, int timeoutMs) throws Exception {
-            String relative = resolver.toRelativePath(locator);
             String prefix = Constants.RESOURCE_PREFIX + "/";
-            if (relative == null || !relative.startsWith(prefix) || relative.contains("..")
-                    || relative.contains("\\") || AidAppConfig.getProfile() == null)
+            String relative = locator;
+            if (!locator.startsWith("/")) {
+                String publicPrefix = URI.create(properties.getEffectiveResourceAccessDomain()).getRawPath() + "/";
+                String publicPath = URI.create(locator).getRawPath();
+                if (publicPath == null || !publicPath.startsWith(publicPrefix))
+                    return Content.failure(null, "LOCAL_PATH_INVALID");
+                relative = prefix + publicPath.substring(publicPrefix.length());
+            }
+            if (!relative.startsWith(prefix) || relative.contains("..") || relative.contains("\\")
+                    || AidAppConfig.getProfile() == null)
                 return Content.failure(null, "LOCAL_PATH_INVALID");
             Path base = Path.of(AidAppConfig.getProfile()).toRealPath();
             Path file = base.resolve(relative.substring(prefix.length())).normalize().toRealPath();

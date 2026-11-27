@@ -1,3 +1,4 @@
+import { digestSha256Hex } from '../sha256';
 import type {
   PrevizAgentRequest,
   PrevizCandidate,
@@ -194,18 +195,9 @@ export function createPrevizWorkingCopyStore(owner: string): PrevizWorkingCopySt
       summary,
     }: PrevizSaveRequest) => {
       validateScene(project.scene);
-      const fingerprint = Array.from(
-        new Uint8Array(
-          await crypto.subtle.digest(
-            "SHA-256",
-            new TextEncoder().encode(
-              JSON.stringify({ project, expectedRevision }),
-            ),
-          ),
-        ),
-      )
-        .map((n) => n.toString(16).padStart(2, "0"))
-        .join("");
+      const fingerprint = await digestSha256Hex(
+        new TextEncoder().encode(JSON.stringify({ project, expectedRevision })),
+      );
       return write(owner, (projects, receipts, done, abort) => {
         const receipt = receipts.get(operationId);
         receipt.onsuccess = () => {

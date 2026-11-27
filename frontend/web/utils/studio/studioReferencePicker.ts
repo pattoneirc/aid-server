@@ -75,11 +75,13 @@ export function studioNodeToComposerRef(node: StudioCanvasNode): StudioComposerR
     nodeId: node.id,
     title: node.data.title,
     mediaKind: node.data.mediaKind ?? (
-      node.data.kind === 'voice'
-        ? 'audio'
-        : node.data.kind === 'text' || node.data.kind === 'storyboard_script'
-          ? 'text'
-          : 'image'
+      node.data.kind === 'video'
+        ? 'video'
+        : node.data.kind === 'voice'
+          ? 'audio'
+          : node.data.kind === 'text' || node.data.kind === 'storyboard_script'
+            ? 'text'
+            : 'image'
     ),
     previewUrl: node.data.mediaUrl,
     textContent,

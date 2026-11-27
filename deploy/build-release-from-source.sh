@@ -707,6 +707,8 @@ apply_realtime_stage_budget() {
   combined_budget_mb=$((STAGE_MEMORY_MAX_MB + STAGE_SWAP_MAX_MB))
   case "$stage_name" in
     maven)
+      [ "$STAGE_MEMORY_MAX_MB" -ge 512 ] \
+        || die "$stage_label 当前可用物理内存上限为 ${STAGE_MEMORY_MAX_MB}MiB，低于 Maven 构建所需的 512MiB。请释放主机内存后重试。已有站点可安排停机窗口再重装。"
       runtime_overhead_mb=$((MAVEN_METASPACE_MB + 128))
       runtime_heap_cap_mb=$((combined_budget_mb - runtime_overhead_mb))
       [ "$runtime_heap_cap_mb" -ge 512 ] \

@@ -402,7 +402,11 @@ export function StudioComposerFrame({
 
   /** 正文 @ / 点缩略图 / 点 chip 再选：只写 mention 通道，不上缩略图条、不改首尾帧。 */
   const insertInlineMention = useCallback((base: StudioComposerRef) => {
-    const appended = appendComposerRefInstance(node.data.composerRefs, {
+    const editor = promptEditorRef.current
+    if (!editor) return
+    const current = useStudioUiStore.getState().nodes.find(item => item.id === node.id)
+    if (!current) return
+    const appended = appendComposerRefInstance(current.data.composerRefs, {
       kind: base.kind,
       nodeId: base.nodeId,
       assetId: base.assetId,
@@ -412,15 +416,16 @@ export function StudioComposerFrame({
       sourceKey: base.sourceKey ?? sourceKeyOfRef(base),
       channel: 'mention'
     })
-    promptEditorRef.current?.insertMention(appended.ref)
-    const nextPrompt = promptEditorRef.current?.getPrompt() ?? promptDraft
+    editor.insertMention(appended.ref)
+    editor.focus()
+    const nextPrompt = editor.getPrompt()
     updateNodeData(node.id, {
       prompt: nextPrompt,
       composerRefs: appended.refs
     })
     setPromptDraft(nextPrompt, nextPrompt)
     setMentionPanel(null)
-  }, [node, promptDraft, setPromptDraft, updateNodeData])
+  }, [node.id, setPromptDraft, updateNodeData])
 
   const removeReference = useCallback((ref: StudioComposerRef) => {
     promptEditorRef.current?.removeMentionById(ref.id)
@@ -763,6 +768,7 @@ export function StudioComposerFrame({
           upstream={upstreamThumbs}
           refs={node.data.composerRefs}
           onInsert={insertInlineMention}
+          showMention={richPrompt}
           onRemove={removeReference}
           issueForRef={issueForRef}
         />

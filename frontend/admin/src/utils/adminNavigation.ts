@@ -7,7 +7,7 @@ const sections = [
     { title: '站点内容', views: ['aid/homebanner/index', 'aid/notice/index', 'aid/notification/index', 'aid/faq/index'] },
   ] },
   { title: '任务与监控', icon: 'monitor', groups: [
-    { title: '任务排查', views: ['system/mediaTaskAnomaly/index', 'aid/error-handling/index', 'aid/extracttask/index', 'aid/errorlog/index'] },
+    { title: '任务排查', views: ['system/mediaTaskAnomaly/index', 'aid/error-handling/index', 'aid/extracttask/index', 'aid/errorlog/index', 'aid/model-request-log/index'] },
     { title: '运行监控', views: ['aid/modelmonitor/index', 'aid/providerbalance/index', 'canvas/session/index', 'monitor/server/index'] },
   ] },
   { title: '用户与财务', icon: 'money', groups: [

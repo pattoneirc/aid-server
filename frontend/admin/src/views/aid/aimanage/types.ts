@@ -54,6 +54,10 @@ export interface ProviderOperationCapabilities {
 }
 
 export interface Model {
+  dedicatedConnectionEnabled?: boolean;
+  dedicatedBaseUrl?: string;
+  dedicatedApiKey?: string;
+  dedicatedConnectionRevision?: number;
   businessBindings?: import('./ModelBusinessBindingEditor').BusinessModelBinding[];
   capabilities?: import('./modelDefinition').ModelCapabilityDefinition[];
   id?: number;

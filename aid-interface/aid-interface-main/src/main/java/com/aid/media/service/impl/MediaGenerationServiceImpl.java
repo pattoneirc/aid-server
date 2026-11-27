@@ -1638,7 +1638,8 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
         boolean textProviderStartMarked = false;
         boolean providerCallEntered = false;
         MediaProviderRouteHealth.Attempt routeAttempt = MediaProviderRouteHealth.Attempt.NONE;
-        try (var executionTransport = com.aid.media.provider.TextExecutionTransportScope.open()) {
+        try (var requestLog = com.aid.model.requestlog.ModelRequestLogCapture.task(task);
+             var executionTransport = com.aid.media.provider.TextExecutionTransportScope.open()) {
             concurrencyLimiter.activate(task, executionTransport::cancel);
             restoreTextTurnContext(request);
             modelOutboundResourcePreparer.prepare(modelConfig, request);
@@ -3145,6 +3146,7 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
             return;
         }
         ProviderTaskResult taskResult;
+        try (var requestLog = com.aid.model.requestlog.ModelRequestLogCapture.task(task)) {
         if (Objects.equals(task.getMediaType(), MediaType.IMAGE.name())) {
             taskResult = getImageClient(task.getProtocol()).query(modelConfig, task.getProviderTaskId());
         } else if (Objects.equals(task.getMediaType(), MediaType.VIDEO.name())) {
@@ -3154,6 +3156,7 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
             taskResult = getAudioClientByProtocol(task.getProtocol()).query(modelConfig, task.getProviderTaskId());
         } else {
             taskResult = getTextClient(task.getProtocol()).query(modelConfig, task.getProviderTaskId());
+        }
         }
         if (taskResult == null) {
             return;
@@ -4330,7 +4333,8 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
      * 任务态提交、调度与轮询必须按任务所属用户解析凭证；COMPOSE 保持独立平台配置契约。
      */
     private void captureProviderRoute(AidMediaTask task, AiModelConfigVo config) {
-        task.setProviderRouteSnapshotJson("tokendance".equalsIgnoreCase(config.getProviderCode())
+        task.setProviderRouteSnapshotJson(config.getDedicatedConnectionRevision() == null
+                && "tokendance".equalsIgnoreCase(config.getProviderCode())
                 ? com.aid.tokendance.credential.TokenDanceTaskRouteSnapshot.capture(config)
                 : com.aid.model.definition.ModelTaskRouteSnapshot.capture(config));
         if (config.getCapabilityCode() != null || "tokendance".equalsIgnoreCase(config.getProviderCode())) {
@@ -5223,12 +5227,6 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
     }
 
     private void doSubmitToProvider(AidMediaTask task, MediaTextGenerateRequest liveTextRequest) {
-        try (com.aid.diagnostics.DiagnosticCapture.TaskScope scope = com.aid.diagnostics.DiagnosticCapture.task(task)) {
-            doSubmitToProviderCaptured(task, liveTextRequest);
-        }
-    }
-
-    private void doSubmitToProviderCaptured(AidMediaTask task, MediaTextGenerateRequest liveTextRequest) {
         // COMPOSE 合成任务走独立提交分支（MPS Provider + ComposeBillingService），
         // 不与图片/视频/TTS/文本共用 billingFacadeService 计费链路；非 COMPOSE 任务逻辑保持不变。
         // submit 起止计时基准（声明在 try 外，保证 catch 也能算 elapsed）。
@@ -5240,7 +5238,8 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
                 && task.getUpstreamAcceptTime() != null;
         boolean textProviderStartMarkedThisAttempt = false;
         boolean synchronousExecution = MediaType.TEXT.name().equals(task.getMediaType());
-        try (var executionTransport = com.aid.media.provider.TextExecutionTransportScope.open();
+        try (var requestLog = com.aid.model.requestlog.ModelRequestLogCapture.task(task);
+             var executionTransport = com.aid.media.provider.TextExecutionTransportScope.open();
              var imageInputs = MediaType.IMAGE.name().equals(task.getMediaType())
                      ? com.aid.media.provider.ImageInputExecutionScope.open(task.getId()) : null) {
             AiModelConfigVo imageModelConfig = null;

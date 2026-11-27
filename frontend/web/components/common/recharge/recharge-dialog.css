@@ -81,7 +81,7 @@ html[data-studio-free-theme] .recharge-modal {
   flex: 0 0 auto;
   place-items: center;
   color: var(--recharge-accent);
-  background: color-mix(in srgb, var(--recharge-accent) 12%, var(--recharge-control));
+  background: color-mix(in srgb, var(--recharge-text) 8%, var(--recharge-control));
 }
 
 .recharge-dialog__emblem {

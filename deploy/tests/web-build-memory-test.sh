@@ -35,6 +35,17 @@ if (SYSTEM_SWAP_FREE_MB=0; load_stage_profile web; apply_realtime_stage_budget w
   exit 1
 fi
 
+SYSTEM_MEMORY_AVAILABLE_MB=947
+if maven_error="$( (load_stage_profile maven; apply_realtime_stage_budget maven 服务端Maven) 2>&1 )"; then
+  echo 'Expected rejection instead of starting Maven with a 390MiB physical limit and swap' >&2
+  exit 1
+fi
+[[ "$maven_error" == *'390MiB'* && "$maven_error" == *'512MiB'* ]]
+SYSTEM_MEMORY_AVAILABLE_MB=2681
+load_stage_profile maven
+apply_realtime_stage_budget maven 服务端Maven
+[[ "$STAGE_MEMORY_MAX_MB" -eq 1301 ]]
+
 memory_dir="$(mktemp -d)"
 trap 'rm -rf -- "$memory_dir"' EXIT
 HOST_MEMORY_CGROUP="$memory_dir"

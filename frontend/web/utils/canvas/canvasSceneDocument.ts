@@ -1,3 +1,4 @@
+import { digestSha256Hex } from '../sha256'
 import type {
   CanvasModelBundle,
   CanvasResource,
@@ -141,14 +142,8 @@ export async function prepareCanvasSceneDocument(
       promise = (async () => {
         const blob = await fetchCanvasPublicationFile(url)
         assertCurrent()
-        const digest = await crypto.subtle.digest(
-          'SHA-256',
-          await blob.arrayBuffer(),
-        )
+        const hash = await digestSha256Hex(await blob.arrayBuffer())
         assertCurrent()
-        const hash = Array.from(new Uint8Array(digest))
-          .map((byte) => byte.toString(16).padStart(2, '0'))
-          .join('')
         const fingerprint = JSON.stringify([type, fileName, hash])
         const operationId = canvasRetryLedger.getOrCreate(
           `scene-model:${options.workspaceId}:${hash}`,

@@ -1,3 +1,4 @@
+export const STUDIO_CONNECTION_RADIUS_PX = 28
 export const STUDIO_CONNECTION_HANDLE_SIZE_PX = 22
 /** 外侧命中区：用于跟随吸附，不改变连线锚点默认位置 */
 export const STUDIO_CONNECTION_HANDLE_ZONE_PX = 48
@@ -56,4 +57,14 @@ export function resolveStudioConnectionHandle(input: {
     x: clampTravel((pointerX - centerX) / scale),
     y: clampTravel((pointerY - centerY) / scale)
   }
+}
+
+export function studioConnectionPreviewPath(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  side: 'source' | 'target' = 'source'
+): string {
+  const bend = Math.max(56, Math.abs(end.x - start.x) * 0.45)
+  const direction = side === 'source' ? 1 : -1
+  return `M ${start.x} ${start.y} C ${start.x + bend * direction} ${start.y}, ${end.x - bend * direction} ${end.y}, ${end.x} ${end.y}`
 }

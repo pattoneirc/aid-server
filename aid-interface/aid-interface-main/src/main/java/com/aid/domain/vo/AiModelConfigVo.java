@@ -51,6 +51,8 @@ public class AiModelConfigVo implements Serializable {
     /** 服务端凭证版本引用，不包含密钥。 */
     private Integer credentialVersion;
 
+    private Long dedicatedConnectionRevision;
+
     /** 模型展示/选择码 (如: gpt5.4_a, qwen-image-max)，全表唯一，前端按此选择 */
     private String modelCode;
 

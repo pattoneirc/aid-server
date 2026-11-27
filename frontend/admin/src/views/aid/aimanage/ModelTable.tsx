@@ -2,7 +2,7 @@ import { providerCategoryLabel } from './providerCategory';
 import React from 'react';
 import ModelMigrationModal from './ModelMigrationModal';
 import ModelMigrationHistory from './ModelMigrationHistory';
-import { Avatar, Button, Input, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
+import { Alert, Avatar, Button, Descriptions, Input, Modal, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
 import { DeleteOutlined, DisconnectOutlined, EditOutlined, GlobalOutlined, LinkOutlined, PlusOutlined, ExperimentOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ModelPoolBindingSnapshot } from '@/api/aid/aimanage';
 import type { Model, Provider } from './types';
@@ -40,6 +40,9 @@ export default function ModelTable({ provider, list, loading, query, onQueryChan
   const [togglingId, setTogglingId] = React.useState<number | null>(null);
   const [testOpen, setTestOpen] = React.useState(false);
   const [testResult, setTestResult] = React.useState<ConfigTestResult | null>(null);
+  const [testQuote, setTestQuote] = React.useState<{ model: Model; quote: ConfigTestResult } | null>(null);
+  const [confirmingTest, setConfirmingTest] = React.useState(false);
+  const [pendingTest, setPendingTest] = React.useState<{ modelId: number; runId: string } | null>(null);
   const [scrollContainer, setScrollContainer] = React.useState<HTMLDivElement | null>(null);
   const testing = React.useRef(false);
   const toggling = React.useRef(false);
@@ -50,12 +53,51 @@ export default function ModelTable({ provider, list, loading, query, onQueryChan
   const poolMap = React.useMemo(() => new Map(poolSnapshot.pools.map((pool) => [pool.id, pool])), [poolSnapshot.pools]);
   const modelPoolMap = React.useMemo(() => new Map(poolSnapshot.models.map((model) => [model.id, model.poolIds])), [poolSnapshot.models]);
 
+  React.useEffect(() => {
+    if (!pendingTest) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    let failures = 0;
+    const deadline = Date.now() + 13 * 60_000;
+    const finish = (result: ConfigTestResult) => {
+      if (!active) return;
+      setTestResult(result);
+      setPendingTest(null);
+      setTestingId(null);
+    };
+    const poll = async () => {
+      if (Date.now() >= deadline) {
+        finish({ success: false, message: '等待测试结果超时，请查看上游任务状态。', elapsedMs: 0, mediaStatus: 'failed' });
+        return;
+      }
+      try {
+        const { data } = await runConfigTest('ai-model', { modelId: pendingTest.modelId, testRunId: pendingTest.runId });
+        if (!active) return;
+        if (data.mediaStatus !== 'running') { finish(data); return; }
+        failures = 0;
+      } catch {
+        if (!active) return;
+        if (++failures >= 3) {
+          finish({ success: false, message: '暂时无法获取上游任务状态。', elapsedMs: 0, mediaStatus: 'failed' });
+          return;
+        }
+      }
+      timer = setTimeout(poll, 5000);
+    };
+    timer = setTimeout(poll, 5000);
+    return () => { active = false; clearTimeout(timer); };
+  }, [pendingTest]);
+
   const handleTestModel = async (row: Model) => {
-    if (testing.current) return;
+    if (testing.current || pendingTest || testQuote) return;
     testing.current = true;
     setTestingId(row.id ?? null);
     try {
       const res = await runConfigTest('ai-model', { modelId: row.id });
+      if (res.data.mediaStatus === 'confirmation' && res.data.confirmationToken) {
+        setTestQuote({ model: row, quote: res.data });
+        return;
+      }
       setTestResult(res.data);
       setTestOpen(true);
     } catch (e: any) {
@@ -63,6 +105,30 @@ export default function ModelTable({ provider, list, loading, query, onQueryChan
     } finally {
       testing.current = false;
       setTestingId(null);
+    }
+  };
+
+  const confirmMediaTest = async () => {
+    if (testing.current || !testQuote || testQuote.model.id == null) return;
+    const { model, quote } = testQuote;
+    const modelId = model.id!;
+    testing.current = true;
+    setConfirmingTest(true);
+    setTestingId(modelId);
+    try {
+      const { data } = await runConfigTest('ai-model', { modelId, confirmationToken: quote.confirmationToken });
+      setTestQuote(null);
+      setTestResult(data);
+      setTestOpen(true);
+      if (data.mediaStatus === 'running' && data.testRunId) setPendingTest({ modelId, runId: data.testRunId });
+      else setTestingId(null);
+    } catch (error) {
+      setTestQuote(null);
+      setTestingId(null);
+      message.error(error instanceof Error ? error.message : '测试请求失败');
+    } finally {
+      testing.current = false;
+      setConfirmingTest(false);
     }
   };
 
@@ -225,6 +291,29 @@ export default function ModelTable({ provider, list, loading, query, onQueryChan
       </div>
       <ModelMigrationModal open={migrationOpen} onClose={() => setMigrationOpen(false)} onComplete={() => onQueryChange({ ...query })} />
       <ModelMigrationHistory open={migrationHistoryOpen} onClose={() => setMigrationHistoryOpen(false)} onComplete={() => onQueryChange({ ...query })} />
+      <Modal
+        open={Boolean(testQuote)}
+        title="确认模型生成测试"
+        okText="确认并生成"
+        cancelText="取消"
+        confirmLoading={confirmingTest}
+        cancelButtonProps={{ disabled: confirmingTest }}
+        closable={!confirmingTest}
+        maskClosable={false}
+        onCancel={() => { if (!confirmingTest) setTestQuote(null); }}
+        onOk={confirmMediaTest}
+      >
+        {testQuote && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions size="small" column={1} items={[
+              { key: 'model', label: '模型', children: testQuote.model.modelName },
+              { key: 'spec', label: '测试规格', children: testQuote.quote.testSpec },
+              { key: 'estimate', label: '预估积分', children: <strong>{testQuote.quote.estimatedCredits ?? '—'} 积分</strong> },
+            ]} />
+            <Alert type="warning" showIcon message="确认后会真实生成并消耗供应商额度。此测试仅展示预估积分，平台不扣积分。" />
+          </Space>
+        )}
+      </Modal>
       <TestResultModal open={testOpen} result={testResult} onClose={() => setTestOpen(false)} />
     </div>
   );

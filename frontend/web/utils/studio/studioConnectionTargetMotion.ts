@@ -29,7 +29,6 @@ export function isStudioConnectionMotionTarget(data: StudioNodeData): boolean {
 
 /** Pointer frames only change the hovered card's compositor styles, never the canvas store. */
 export function createStudioConnectionTargetMotion(canvas: HTMLElement) {
-  let sourceId: string | null = null
   let target: HTMLElement | null = null
   let candidates: HTMLElement[] = []
   let frame: number | null = null
@@ -46,7 +45,7 @@ export function createStudioConnectionTargetMotion(canvas: HTMLElement) {
 
   const paint = () => {
     frame = null
-    if (!sourceId || !pointer) return
+    if (!pointer) return
     // React Flow disables node hit testing while a connection is active, so
     // elementFromPoint() sees the pane instead of the card under the pointer.
     const next = candidates.findLast((shell) => {
@@ -79,18 +78,17 @@ export function createStudioConnectionTargetMotion(canvas: HTMLElement) {
     if (frame !== null) window.cancelAnimationFrame(frame)
     frame = null
     pointer = null
-    sourceId = null
     candidates = []
     clearTarget()
   }
 
   return {
-    start(nodeId: string | null) {
+    start(origin: string | readonly string[] | null) {
       stop()
-      if (!nodeId || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
-      sourceId = nodeId
+      if (!origin || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+      const sourceIds = new Set(typeof origin === 'string' ? [origin] : origin)
       candidates = Array.from(canvas.querySelectorAll<HTMLElement>('.studio-node-shell[data-connection-tilt="true"]'))
-        .filter((shell) => shell.closest<HTMLElement>('.react-flow__node')?.dataset.id !== nodeId)
+        .filter((shell) => !sourceIds.has(shell.closest<HTMLElement>('.react-flow__node')?.dataset.id ?? ''))
       window.addEventListener('pointermove', move, { passive: true })
     },
     stop

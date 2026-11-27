@@ -79,7 +79,7 @@ export function ViewportCompactScaleToggle() {
 
   return (
     <div
-      className="viewport-compact-scale-toggle fixed right-[16px] bottom-[16px] z-[900] flex items-center gap-[8px] px-[12px] py-[8px] rounded-[999px] border border-solid border-[rgba(74,231,253,0.22)] bg-[rgba(12,16,24,0.88)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-[8px]"
+      className="viewport-compact-scale-toggle fixed right-[16px] bottom-[16px] z-[900] flex items-center gap-[8px] px-[12px] py-[8px] rounded-[999px] border border-solid border-[rgba(144,196,229,0.22)] bg-[rgba(12,16,24,0.88)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-[8px]"
       role="group"
       aria-label="低分辨率界面缩放"
     >

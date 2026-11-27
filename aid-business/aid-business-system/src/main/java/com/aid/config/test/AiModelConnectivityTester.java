@@ -17,10 +17,8 @@ import com.aid.model.probe.ProbeResult;
 import com.aid.model.probe.ProviderProbe;
 import com.aid.domain.vo.AiModelConfigVo;
 import com.aid.media.dto.MediaTextGenerateRequest;
-import com.aid.media.dto.MediaImageGenerateRequest;
 import com.aid.media.provider.ProviderSubmitResult;
 import com.aid.media.provider.impl.GenericOpenAiCompatibleTextProviderClient;
-import com.aid.newapi.NewApiImageProviderClient;
 import com.aid.service.IAiModelConfigService;
 
 import cn.hutool.core.convert.Convert;
@@ -48,17 +46,19 @@ public class AiModelConnectivityTester implements ConfigConnectivityTester {
     private final Map<String, ProviderProbe> providerProbeMap = new HashMap<>();
 
     private IAiModelConfigService modelConfigurations;
+    @org.springframework.beans.factory.annotation.Autowired
+    private java.util.List<com.aid.media.provider.TextProviderClient> textClients;
+
     private GenericOpenAiCompatibleTextProviderClient newApiTextClient;
-    private NewApiImageProviderClient newApiImageClient;
+    @org.springframework.beans.factory.annotation.Autowired
+    private AdminMediaModelTest adminMediaModelTest;
 
     @org.springframework.beans.factory.annotation.Autowired
     public void setNewApiGenerationTestDependencies(IAiModelConfigService modelConfigurations,
             @org.springframework.beans.factory.annotation.Qualifier("genericOpenAiCompatibleTextProviderClient")
-            GenericOpenAiCompatibleTextProviderClient newApiTextClient,
-            NewApiImageProviderClient newApiImageClient) {
+            GenericOpenAiCompatibleTextProviderClient newApiTextClient) {
         this.modelConfigurations = modelConfigurations;
         this.newApiTextClient = newApiTextClient;
-        this.newApiImageClient = newApiImageClient;
     }
 
     /**
@@ -111,13 +111,15 @@ public class AiModelConnectivityTester implements ConfigConnectivityTester {
                 log.error("AI 模型探活失败: 服务商不存在, providerId={}", model.getProviderId());
                 return ConfigTestResult.fail("服务商不存在");
             }
+            if ("image".equals(model.getModelType()) || "video".equals(model.getModelType())) {
+                return adminMediaModelTest.execute(modelId, model.getModelType(), request.getPayload());
+            }
+            if ("text".equals(model.getModelType())) {
+                return testTextGeneration(model);
+            }
             if ("NEW_API".equals(provider.getIntegrationType())
                     && "openai-compatible-text".equals(model.getProtocol())) {
                 return testNewApiTextGeneration(model, provider);
-            }
-            if ("NEW_API".equals(provider.getIntegrationType())
-                    && "newapi-image".equals(model.getProtocol())) {
-                return testNewApiImageGeneration(model, provider);
             }
             String providerCode = provider.getProviderCode();
             ProviderProbe probe = providerProbeMap.get(providerCode);
@@ -142,9 +144,32 @@ public class AiModelConnectivityTester implements ConfigConnectivityTester {
             return toTestResult(probeResult, providerCode);
         } catch (Exception e) {
             // 兜底：禁止异常冒泡到前端
-            log.error("AI 模型探活异常, testKey={}", testKey(), e);
+            log.warn("AI 模型测试失败, failureType={}", e.getClass().getSimpleName());
             return buildFail("测试执行失败", e);
         }
+    }
+
+    /** Reuse the production text adapter without creating a media task or touching the ledger. */
+    private ConfigTestResult testTextGeneration(AidAiModel model) {
+        AiModelConfigVo config = modelConfigurations.selectByModelCodeForUser(model.getModelCode(), null);
+        if (config == null || StrUtil.isBlank(config.getBaseUrl()) || StrUtil.isBlank(config.getApiKey())) {
+            return ConfigTestResult.fail("模型调用地址或密钥未配置");
+        }
+        var candidates = textClients.stream().filter(client -> client.supportsProtocol(config.getProtocol())).toList();
+        if (candidates.size() != 1) return ConfigTestResult.fail("模型调用协议缺失或不唯一");
+        var client = com.aid.media.security.ConfidentialTextProviderClient.wrap(candidates.get(0));
+        MediaTextGenerateRequest request = new MediaTextGenerateRequest();
+        request.setModelName(config.getModelCode());
+        request.setPrompt("Reply with the single word OK.");
+        request.setOptions(Map.of(com.aid.media.provider.TextReasoningOptionsResolver.MAX_OUTPUT_TOKENS_KEY, 32));
+        ProviderSubmitResult result = client.chatSync(config, request);
+        if (result == null || StrUtil.isBlank(result.getDirectText())) {
+            return ConfigTestResult.fail("上游未返回有效文本");
+        }
+        ConfigTestResult success = ConfigTestResult.ok("实际生成成功", config.getProviderCode());
+        String output = result.getDirectText().replace(config.getApiKey(), "[凭据已隐藏]");
+        success.setOutputText(output.substring(0, Math.min(4000, output.length())));
+        return success;
     }
 
     /** New API 文本模型实际发起最小生成，只有收到助手正文才判定可用。 */
@@ -162,25 +187,6 @@ public class AiModelConnectivityTester implements ConfigConnectivityTester {
         }
         ConfigTestResult result = ConfigTestResult.ok("实际生成成功", provider.getProviderCode());
         result.setDetails("已通过本站配置向上游发起文本生成；返回了助手正文。该测试会消耗少量上游额度。");
-        return result;
-    }
-
-    /** 与正式图片任务共用协议客户端，生成并保存一张图片后才判定可用。 */
-    private ConfigTestResult testNewApiImageGeneration(AidAiModel model, AidAiProvider provider) {
-        if (modelConfigurations == null || newApiImageClient == null) return ConfigTestResult.fail("实际生成测试不可用");
-        AiModelConfigVo config = modelConfigurations.selectByModelId(model.getId());
-        if (config == null || StrUtil.isBlank(config.getApiKey())) return ConfigTestResult.fail("模型调用密钥未配置");
-        MediaImageGenerateRequest request = new MediaImageGenerateRequest();
-        request.setModelName(model.getModelCode());
-        request.setPrompt("A small blue dot on a white background");
-        request.setSize("1024x1024");
-        request.setExpectedImageCount(1);
-        ProviderSubmitResult response = newApiImageClient.submit(config, request);
-        if (response == null || (StrUtil.isBlank(response.getDirectUrl()) && StrUtil.isBlank(response.getOssUrl()))) {
-            return ConfigTestResult.fail("上游未返回可保存的图片，请核对模型 Key、存储配置和额度");
-        }
-        ConfigTestResult result = ConfigTestResult.ok("实际生成成功", provider.getProviderCode());
-        result.setDetails("已按正式图片协议向上游生成一张图片并完成结果保存。该测试会消耗上游额度。");
         return result;
     }
 
@@ -218,7 +224,7 @@ public class AiModelConnectivityTester implements ConfigConnectivityTester {
      */
     private ConfigTestResult buildFail(String message, Exception e) {
         ConfigTestResult result = ConfigTestResult.fail(message);
-        result.setDetails(e.getClass().getSimpleName() + ": " + e.getMessage());
+        result.setDetails(e.getClass().getSimpleName());
         return result;
     }
 }

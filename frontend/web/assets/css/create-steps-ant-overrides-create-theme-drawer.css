@@ -69,7 +69,7 @@ html:where(:not([data-studio-free-theme])).app-shell-create .ant-drawer .ant-dra
   color: var(--ui-text, #e6edf3) !important;
 }
 
-html:where(:not([data-studio-free-theme])).app-shell-create .ant-drawer .ant-drawer-body *:not(img):not(video):not(canvas):not(input):not(textarea):not(select) {
+html:where(:not([data-studio-free-theme])).app-shell-create .ant-drawer .ant-drawer-body *:not(img):not(video):not(canvas):not(input):not(textarea):not(select):not(button):not(a):not(:is(button *, a *)) {
   color: var(--ui-text, #e6edf3) !important;
 }
 
@@ -85,6 +85,11 @@ html:where(:not([data-studio-free-theme])).app-shell-create .ant-drawer .ant-dra
 html:where(:not([data-studio-free-theme])).app-shell-create .ant-drawer .ant-drawer-body .ant-btn-primary,
 html:where(:not([data-studio-free-theme])).app-shell-create .ant-drawer .ant-drawer-body .ant-btn-primary * {
   color: var(--ui-on-primary, #fff) !important;
+}
+
+html:where(:not([data-studio-free-theme])).app-shell-create .ant-drawer .ant-drawer-body .recharge-package__buy,
+html:where(:not([data-studio-free-theme])).app-shell-create .ant-drawer .ant-drawer-body .recharge-package__buy * {
+  color: var(--recharge-action-ink, var(--ui-on-primary, #111215)) !important;
 }
 :where(html:not([data-studio-free-theme])) .ql-container.ql-snow{
   border: none !important;

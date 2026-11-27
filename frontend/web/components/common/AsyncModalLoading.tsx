@@ -13,7 +13,7 @@ export function AsyncModalLoading() {
     >
       <div className="async-modal-loading__backdrop absolute inset-0 bg-[rgb(0_0_0/45%)]" />
       <div
-        className="async-modal-loading__panel relative flex min-w-[184px] min-h-[88px] items-center justify-center gap-[10px] px-[24px] py-[20px] rounded-[8px] border border-solid border-[rgba(74,231,253,0.28)] bg-[#191a1d] shadow-[0_12px_36px_rgb(0_0_0/45%)] text-[#e6edf3] text-[14px]"
+        className="async-modal-loading__panel relative flex min-w-[184px] min-h-[88px] items-center justify-center gap-[10px] px-[24px] py-[20px] rounded-[8px] border border-solid border-[rgba(144,196,229,0.28)] bg-[#191a1d] shadow-[0_12px_36px_rgb(0_0_0/45%)] text-[#e6edf3] text-[14px]"
         aria-live="polite"
         aria-busy="true"
       >

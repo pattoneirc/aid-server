@@ -48,6 +48,9 @@ public class AiModelConfigServiceImpl implements IAiModelConfigService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.aid.model.definition.ModelBusinessBindingService modelBusinessBindings;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aid.aid.service.support.ModelConnectionStore modelConnectionStore;
+
     private static final String STATUS_NORMAL = "0";
     private static final String DEL_FLAG_NORMAL = "0";
 
@@ -135,14 +138,19 @@ public class AiModelConfigServiceImpl implements IAiModelConfigService {
 
     /** 按指定用户组装模型、供应商及用户覆盖配置。 */
     private AiModelConfigVo buildConfigVo(AidAiModel model, Long userId) {
-        return buildConfigVo(model, userId, false);
+        Long revision = model == null || !Boolean.TRUE.equals(model.getDedicatedConnectionEnabled())
+                ? null : model.getDedicatedConnectionRevision();
+        if (model != null && Boolean.TRUE.equals(model.getDedicatedConnectionEnabled()) && revision == null) {
+            throw new ServiceException("模型专属连接尚未配置");
+        }
+        return buildConfigVo(model, userId, false, revision);
     }
 
     @Override
     public AiModelConfigVo selectTaskCredentials(Long modelId, String modelCode, Long userId) {
         AidAiModel model = aidAiModelService.getById(modelId);
         if (model == null || !java.util.Objects.equals(model.getModelCode(), modelCode)) return null;
-        return buildConfigVo(model, userId, true);
+        return buildConfigVo(model, userId, true, null);
     }
 
     @Override
@@ -169,7 +177,15 @@ public class AiModelConfigServiceImpl implements IAiModelConfigService {
         return credentials;
     }
 
-    private AiModelConfigVo buildConfigVo(AidAiModel model, Long userId, boolean existingTask) {
+    @Override
+    public AiModelConfigVo selectDedicatedTaskCredentials(Long modelId, String modelCode, Long revision) {
+        AidAiModel model = aidAiModelService.getById(modelId);
+        if (model == null || !java.util.Objects.equals(model.getModelCode(), modelCode)) return null;
+        return buildConfigVo(model, null, true, revision);
+    }
+
+    private AiModelConfigVo buildConfigVo(AidAiModel model, Long userId, boolean existingTask,
+                                         Long dedicatedRevision) {
         if (model == null) {
             return null;
         }
@@ -189,7 +205,12 @@ public class AiModelConfigServiceImpl implements IAiModelConfigService {
         String effectiveApiSecret = provider.getApiSecret();
         boolean tokenDance = "tokendance".equalsIgnoreCase(StrUtil.trim(provider.getProviderCode()));
         Integer credentialVersion = null;
-        if (tokenDance) {
+        if (dedicatedRevision != null) {
+            var connection = modelConnectionStore.load(model.getId(), dedicatedRevision);
+            effectiveBaseUrl = connection.baseUrl();
+            effectiveApiKey = connection.apiKey();
+            effectiveApiSecret = null;
+        } else if (tokenDance) {
             com.aid.tokendance.credential.ResolvedTokenDanceCredential credential =
                     tokenDanceCredentialStore.requireActive(provider.getId());
             effectiveApiKey = credential.getApiKey();
@@ -200,7 +221,7 @@ public class AiModelConfigServiceImpl implements IAiModelConfigService {
         // 官方统一网关开启后，全局厂商出站改走官方地址与官方密钥（协议仍遵循原厂商）；
         // 例外模型或例外厂商（官方网关暂不支持的）仍走自有厂商网关
         OfficialGatewayConfig officialGateway = officialGatewayConfigProvider.getConfig();
-        if (officialGateway.isEnabled() && StrUtil.isNotBlank(officialGateway.getBaseUrl())
+        if (dedicatedRevision == null && officialGateway.isEnabled() && StrUtil.isNotBlank(officialGateway.getBaseUrl())
                 && !officialGateway.isExcluded(model.getId(), provider.getId())
                 && supportsOfficialGateway(model, provider)) {
             effectiveBaseUrl = officialGateway.resolveBaseUrl(provider.getProviderCode());
@@ -209,7 +230,7 @@ public class AiModelConfigServiceImpl implements IAiModelConfigService {
             }
         }
 
-        if (userId != null && !tokenDance) {
+        if (dedicatedRevision == null && userId != null && !tokenDance) {
             AidUserAiConfig userConfig = aidUserAiConfigService.getOne(
                 Wrappers.<AidUserAiConfig>lambdaQuery()
                     .eq(AidUserAiConfig::getUserId, userId)
@@ -243,6 +264,7 @@ public class AiModelConfigServiceImpl implements IAiModelConfigService {
         vo.setConfigVersion(model.getConfigVersion());
         vo.setProviderId(model.getProviderId());
         vo.setCredentialVersion(credentialVersion);
+        vo.setDedicatedConnectionRevision(dedicatedRevision);
         vo.setModelCode(model.getModelCode());
         // 真实上游模型名：优先 real_model_code，为空回退 model_code
         String effectiveRealModelCode = StrUtil.isNotBlank(model.getRealModelCode())
@@ -296,9 +318,9 @@ public class AiModelConfigServiceImpl implements IAiModelConfigService {
         // LLM Provider 鉴权与请求扩展配置（厂商级）
         vo.setAuthHeader(provider.getAuthHeader());
         vo.setAuthPrefix(provider.getAuthPrefix());
-        vo.setExtraHeadersJson(provider.getExtraHeaders());
+        vo.setExtraHeadersJson(dedicatedRevision == null ? provider.getExtraHeaders() : null);
         vo.setExtraBodyJson(provider.getExtraBody());
-        vo.setExtraQueryJson(provider.getExtraQuery());
+        vo.setExtraQueryJson(dedicatedRevision == null ? provider.getExtraQuery() : null);
         // 模型级 extra_body（合并时覆盖厂商级同名 key）
         vo.setModelExtraBodyJson(model.getExtraBody());
 

@@ -32,7 +32,8 @@ export function modelEditChanged(initialSnapshot: string, current: unknown): boo
 
 const EDITABLE_UPDATE_FIELDS = [
   'modelName', 'realModelCode', 'logoUrl', 'remark',
-  'status', 'priority', 'billingMultiplier', 'isFree', 'scheduleStrategyJson'
+  'status', 'priority', 'billingMultiplier', 'isFree', 'scheduleStrategyJson',
+  'dedicatedConnectionEnabled', 'dedicatedBaseUrl', 'dedicatedApiKey'
 ] as const satisfies readonly (keyof Model)[];
 
 export type ModelEditableBaseline = Record<(typeof EDITABLE_UPDATE_FIELDS)[number], string>;

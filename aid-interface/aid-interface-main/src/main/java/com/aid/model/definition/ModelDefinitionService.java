@@ -129,11 +129,17 @@ public class ModelDefinitionService {
         return aliases.selectList(Wrappers.<AidAiModelAlias>lambdaQuery().eq(AidAiModelAlias::getModelId, id));
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aid.aid.service.support.ModelConnectionStore modelConnectionStore;
+
     public AidAiModel detail(Long id) {
         AidAiModelAlias old = alias(id);
         if (old != null) id = old.getModelId();
         AidAiModel model = models.selectAidAiModelById(id);
         if (model != null) {
+            if (model.getDedicatedConnectionRevision() != null) {
+                model.setDedicatedBaseUrl(modelConnectionStore.baseUrl(id, model.getDedicatedConnectionRevision()));
+            }
             List<ModelCapabilityDefinition> configured = definitions(id);
             model.setStructuredCapabilities(!configured.isEmpty());
             model.setCapabilities(configured.isEmpty() ? LegacyModelDefinitionConverter.convert(model) : configured);

@@ -18,7 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class ModelTaskRouteSnapshot {
     private static final Set<String> FIELDS = Set.of("id", "providerId", "modelCode", "modelName", "modelType", "realModelCode",
-            "capabilityCode", "bindingCode", "configVersion", "generateMode", "protocol", "apiSuffix", "apiVersion", "taskQuerySuffix",
+            "capabilityCode", "bindingCode", "configVersion", "dedicatedConnectionRevision", "generateMode", "protocol", "apiSuffix", "apiVersion", "taskQuerySuffix",
             "capabilityJson", "paramMappingJson", "modelExtraBodyJson", "billingMode", "billingRuleJson", "billingVersion",
             "billingMultiplier", "costCredits", "isFree", "baseUrl", "providerCode", "authHeader", "authPrefix", "extraHeadersJson", "extraQueryJson", "extraBodyJson", "requestMappings");
 

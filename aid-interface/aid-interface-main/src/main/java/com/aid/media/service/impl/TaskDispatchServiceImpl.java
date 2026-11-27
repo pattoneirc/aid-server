@@ -832,7 +832,7 @@ public class TaskDispatchServiceImpl implements TaskDispatchService {
 
     private ProviderTaskResult queryUpstreamCaptured(AidMediaTask task) {
         if (task == null || StrUtil.isBlank(task.getProviderTaskId())) return null;
-        try {
+        try (var requestLog = com.aid.model.requestlog.ModelRequestLogCapture.task(task)) {
             //    MPS 不在 aid_ai_model，故必须在 selectByModelCode 之前短路，避免因模型缺失误判为「无法查询」。
             if (Objects.equals(task.getMediaType(), com.aid.compose.ComposeConstants.MEDIA_TYPE_COMPOSE)) {
                 VideoProviderClient composeClient = resolveVideoClient(task.getProtocol());

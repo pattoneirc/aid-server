@@ -42,11 +42,11 @@
 
 .cvfm-video-card:hover,
 .cvfm-video-card.is-active {
-  border-color: var(--accent-500, var(--ui-ring, #4ae7fd));
+  border-color: var(--accent-500, var(--ui-ring, #90c4e5));
 }
 
 .cvfm-video-card.is-active {
-  box-shadow: var(--ui-no-shadow, 0 0 0 1px rgba(74, 231, 253, 0.25));
+  box-shadow: var(--ui-no-shadow, 0 0 0 1px rgba(144, 196, 229, 0.25));
 }
 
 .cvfm-video-card__shimmer {
@@ -85,10 +85,10 @@
   height: 32px;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--ui-hair, rgba(74, 231, 253, 0.35));
+  border: 1px solid var(--ui-hair, rgba(144, 196, 229, 0.35));
   border-radius: 50%;
   background: var(--ui-bg, rgba(12, 18, 29, 0.92));
-  color: var(--accent-500, var(--ui-brand, #4ae7fd));
+  color: var(--accent-500, var(--ui-brand, #90c4e5));
   cursor: pointer;
   box-shadow: var(--ui-no-shadow, 0 4px 14px rgba(0, 0, 0, 0.38));
 }
@@ -108,7 +108,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border: 1px solid var(--ui-hair, rgba(74, 231, 253, 0.2));
+  border: 1px solid var(--ui-hair, rgba(144, 196, 229, 0.2));
   border-radius: 10px;
   background: var(--ui-bg, #080b12);
 }
@@ -155,7 +155,7 @@
 .cvfm-play-btn,
 .cvfm-boundary-btn {
   flex-shrink: 0;
-  border: 1px solid rgba(74, 231, 253, 0.3);
+  border: 1px solid rgba(144, 196, 229, 0.3);
   border-radius: 6px;
   background: var(--create-surface-input, rgba(28, 38, 54, 0.92));
   color: var(--home-text, #e6edf3);
@@ -164,8 +164,8 @@
 
 .cvfm-play-btn:hover:not(:disabled),
 .cvfm-boundary-btn:hover:not(:disabled) {
-  border-color: var(--accent-500, #4ae7fd);
-  color: var(--accent-500, #4ae7fd);
+  border-color: var(--accent-500, #90c4e5);
+  color: var(--accent-500, #90c4e5);
 }
 
 .cvfm-play-btn:disabled,
@@ -219,7 +219,7 @@
 
 .cvfm-filmstrip__placeholder {
   background:
-    var(--ui-surface, linear-gradient(90deg, rgba(74, 231, 253, 0.08), transparent 45%, rgba(74, 231, 253, 0.08)),
+    var(--ui-surface, linear-gradient(90deg, rgba(144, 196, 229, 0.08), transparent 45%, rgba(144, 196, 229, 0.08)),
     #0a0e15);
 }
 

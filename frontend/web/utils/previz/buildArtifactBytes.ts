@@ -1,5 +1,6 @@
 import type { PrevizBuildArtifact } from './remoteWorkspace';
 import { PREVIZ_GLB_MAX_BYTES } from './limits';
+import { digestSha256Hex } from '../sha256';
 
 /** One bounded integrity gate for adopting or downloading an authoritative build artifact. */
 export async function previzBuildArtifactBytes(artifact: PrevizBuildArtifact): Promise<Uint8Array<ArrayBuffer>> {
@@ -13,7 +14,7 @@ export async function previzBuildArtifactBytes(artifact: PrevizBuildArtifact): P
   const header=new DataView(bytes.buffer);
   if(header.getUint32(0,true)!==0x46546c67||header.getUint32(4,true)!==2||header.getUint32(8,true)!==bytes.byteLength)
     throw new Error('模型文件格式校验失败');
-  const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');
+  const digest = await digestSha256Hex(bytes);
   if(digest!==metadata.sha256)throw new Error('模型文件指纹校验失败');
   return bytes;
 }

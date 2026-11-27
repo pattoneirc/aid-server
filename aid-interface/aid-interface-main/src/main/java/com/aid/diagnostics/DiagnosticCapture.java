@@ -44,6 +44,7 @@ public class DiagnosticCapture {
     @PostConstruct void initialize() {
         instance=this;
         GlobalInterceptor.INSTANCE.addRequestInterceptor(request->{
+            com.aid.model.requestlog.ModelRequestLogCapture.hutoolRequest(request);
             if(CURRENT.get()==null) return;
             try {
                 registerHeaders(request.headers());
@@ -53,6 +54,7 @@ public class DiagnosticCapture {
             } catch(Exception ignored) { captureFailures.incrementAndGet(); }
         });
         GlobalInterceptor.INSTANCE.addResponseInterceptor(response->{
+            com.aid.model.requestlog.ModelRequestLogCapture.hutoolResponse(response);
             if(CURRENT.get()==null) return;
             String contentType=Objects.toString(response.header("Content-Type"),"");
             if(contentType.contains("text/event-stream") || contentType.startsWith("image/") || contentType.startsWith("audio/") || contentType.startsWith("video/") || contentType.contains("octet-stream")) return;

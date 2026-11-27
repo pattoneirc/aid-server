@@ -1,6 +1,7 @@
 'use client'
 
 import { StudioCanvasPopover } from '@/components/studio/canvas/StudioCanvasPopover'
+import { StudioComposerReferenceMentionButton } from './StudioComposerReferenceMentionButton'
 import {
   CloseOutlined,
   FileImageOutlined,
@@ -25,6 +26,7 @@ export function StudioComposerReferenceCard({
   summary,
   mediaKind,
   index,
+  onInsert,
   onRemove
 }: {
   refItem: StudioComposerRef
@@ -32,6 +34,7 @@ export function StudioComposerReferenceCard({
   summary: string
   mediaKind: StudioMediaKind | undefined
   index: number
+  onInsert?: (ref: StudioComposerRef) => void
   onRemove?: (ref: StudioComposerRef) => void
 }) {
   const audio = mediaKind === 'audio'
@@ -64,6 +67,9 @@ export function StudioComposerReferenceCard({
           ) : <i aria-hidden>{iconFor(mediaKind)}</i>}
         </button>
       </StudioCanvasPopover>
+      {onInsert ? (
+        <StudioComposerReferenceMentionButton title={title} onInsert={() => onInsert(refItem)} />
+      ) : null}
       {onRemove ? (
         <button
           type="button"

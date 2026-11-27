@@ -1,9 +1,10 @@
 import type { PrevizScene, PrevizAsset } from "@/types/previz";
 import type { PrevizEditorSnapshot } from "./remoteWorkspace";
 import { previzNetworkScene } from './sceneProjection';
+import { digestSha256Hex } from '../sha256';
 
 const assetHashes=new WeakMap<PrevizAsset,{dataUrl:string;hash:Promise<string>}>();
-const hashText=async(value:string)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))),value=>value.toString(16).padStart(2,'0')).join('');
+const hashText = (value: string) => digestSha256Hex(new TextEncoder().encode(value));
 function canonical(value:unknown):unknown {
   if(Array.isArray(value))return value.map(canonical);
   if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([key,item])=>[key,canonical(item)]));

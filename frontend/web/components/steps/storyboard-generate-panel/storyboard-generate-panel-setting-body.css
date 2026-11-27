@@ -115,7 +115,7 @@
   padding: calc(2px * var(--create-editor-scale, 1)) calc(8px * var(--create-editor-scale, 1));
   border-radius: calc(8px * var(--create-editor-scale, 1));
   min-height: calc(30px * var(--create-editor-scale, 1));
-  background: color-mix(in srgb, var(--v10-brand) 12%, var(--v10-s2));
+  background: color-mix(in srgb, var(--v10-text) 8%, var(--v10-s2));
   border: calc(1px * var(--create-editor-scale, 1)) solid var(--v10-ring);
   color: var(--v10-text);
   font-size: calc(12px * var(--create-editor-scale, 1));

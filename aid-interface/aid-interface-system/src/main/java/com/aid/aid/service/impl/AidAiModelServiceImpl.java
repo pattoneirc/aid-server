@@ -62,6 +62,9 @@ public class AidAiModelServiceImpl extends ServiceImpl<AidAiModelMapper, AidAiMo
     private IAidAiProviderService aidAiProviderService;
 
     @Autowired
+    private com.aid.aid.service.support.ModelConnectionStore modelConnectionStore;
+
+    @Autowired
     private ModelReferenceGuard modelReferenceGuard;
 
     /**
@@ -153,10 +156,13 @@ public class AidAiModelServiceImpl extends ServiceImpl<AidAiModelMapper, AidAiMo
      * @return 结果
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public int insertAidAiModel(AidAiModel aidAiModel)
     {
         ModelConfigurationMerge.validate(aidAiModel.getCapabilityJson());
         ModelConfigurationMerge.validate(aidAiModel.getBillingRuleJson());
+        aidAiModel.setDedicatedConnectionRevision(null);
+        var dedicatedConnection = prepareDedicatedConnection(aidAiModel, null);
         aidAiModel.setConfigVersion(0L);
         validateModelCodeNotBlank(aidAiModel.getModelCode());
         validateAndNormalizeApiSuffix(aidAiModel);
@@ -166,7 +172,11 @@ public class AidAiModelServiceImpl extends ServiceImpl<AidAiModelMapper, AidAiMo
         aidAiModel.setCreateTime(DateUtils.getNowDate());
         aidAiModel.setCreateBy(currentUsername());
         try {
-            return this.save(aidAiModel) ? 1 : 0;
+            if (!this.save(aidAiModel)) return 0;
+            if (dedicatedConnection != null) {
+                modelConnectionStore.save(aidAiModel.getId(), aidAiModel.getDedicatedConnectionRevision(), dedicatedConnection);
+            }
+            return 1;
         } catch (DuplicateKeyException e) {
             log.error("AidAiModel 新增触发唯一键冲突, modelCode={}", aidAiModel.getModelCode(), e);
             throw new ServiceException("编码已存在");
@@ -180,6 +190,7 @@ public class AidAiModelServiceImpl extends ServiceImpl<AidAiModelMapper, AidAiMo
      * @return 结果
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public int updateAidAiModel(AidAiModel aidAiModel)
     {
         validateModelCodeNotBlank(aidAiModel.getModelCode());
@@ -190,7 +201,8 @@ public class AidAiModelServiceImpl extends ServiceImpl<AidAiModelMapper, AidAiMo
                 Wrappers.<AidAiModel>lambdaQuery()
                         .select(AidAiModel::getId, AidAiModel::getStatus, AidAiModel::getBillingMode,
                                 AidAiModel::getBillingRuleJson, AidAiModel::getCostCredits,
-                                AidAiModel::getCapabilityJson, AidAiModel::getConfigVersion)
+                                AidAiModel::getCapabilityJson, AidAiModel::getConfigVersion,
+                                AidAiModel::getDedicatedConnectionEnabled, AidAiModel::getDedicatedConnectionRevision)
                         .eq(AidAiModel::getId, aidAiModel.getId())
                         .last("limit 1"),
                 false);
@@ -203,6 +215,8 @@ public class AidAiModelServiceImpl extends ServiceImpl<AidAiModelMapper, AidAiMo
             log.info("模型配置版本已变化: id={}", aidAiModel.getId());
             throw new ServiceException("配置已更新请刷新");
         }
+        aidAiModel.setDedicatedConnectionRevision(null);
+        var dedicatedConnection = prepareDedicatedConnection(aidAiModel, before);
         if (aidAiModel.getCapabilityJson() != null) {
             aidAiModel.setCapabilityJson(ModelConfigurationMerge.merge(
                     before.getCapabilityJson(), aidAiModel.getCapabilityJson()));
@@ -226,12 +240,37 @@ public class AidAiModelServiceImpl extends ServiceImpl<AidAiModelMapper, AidAiMo
                 log.info("模型配置并发保存冲突: id={}", aidAiModel.getId());
                 throw new ServiceException("配置已更新请刷新");
             }
+            if (dedicatedConnection != null) {
+                modelConnectionStore.save(aidAiModel.getId(), aidAiModel.getDedicatedConnectionRevision(), dedicatedConnection);
+            }
             return 1;
         } catch (DuplicateKeyException e) {
             log.error("AidAiModel 更新触发唯一键冲突, id={}, modelCode={}",
                     aidAiModel.getId(), aidAiModel.getModelCode(), e);
             throw new ServiceException("编码已存在");
         }
+    }
+
+    private com.aid.aid.service.support.ModelConnectionStore.Connection prepareDedicatedConnection(
+            AidAiModel update, AidAiModel before) {
+        Long revision = before == null ? null : before.getDedicatedConnectionRevision();
+        boolean enabled = update.getDedicatedConnectionEnabled() == null
+                ? before != null && Boolean.TRUE.equals(before.getDedicatedConnectionEnabled())
+                : Boolean.TRUE.equals(update.getDedicatedConnectionEnabled());
+        String url = update.getDedicatedBaseUrl();
+        String apiKey = update.getDedicatedApiKey();
+        boolean replaceKey = apiKey != null && !apiKey.isBlank();
+        if (url == null && !replaceKey) {
+            if (enabled && revision == null) throw new ServiceException("请配置模型专属地址和 API Key");
+            return null;
+        }
+        var previous = revision == null ? null : modelConnectionStore.load(before.getId(), revision);
+        if (url == null && previous != null) url = previous.baseUrl();
+        if (!replaceKey && previous != null) apiKey = previous.apiKey();
+        var connection = modelConnectionStore.validate(url, apiKey);
+        if (connection.equals(previous)) return null;
+        update.setDedicatedConnectionRevision(revision == null ? 1L : Math.incrementExact(revision));
+        return connection;
     }
 
     /** 校验并规范化模型提交相对路径。 */

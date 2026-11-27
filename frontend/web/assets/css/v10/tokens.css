@@ -11,8 +11,8 @@
   --v10-text: #f1f2f4;
   --v10-muted: #a8abb3;
   --v10-subtle: #8b8e98;
-  --v10-brand: #4ae7fd;
-  --v10-on-brand: #062a31;
+  --v10-brand: #90c4e5;
+  --v10-on-brand: #0f1012;
   --v10-success: #5fd38d;
   --v10-warning: #f2b94b;
   --v10-danger: #ff7a7a;
@@ -51,7 +51,7 @@
   --v10-primary-icon-filter: brightness(0);
   --v10-add-form: rgba(255,255,255,.03);
   --v10-selection: var(--v10-s4);
-  --v10-flow-accent: #8fdbe6;
+  --v10-flow-accent: #90c4e5;
   --v10-flow-sheen: rgba(255,255,255,.07);
   --v10-flow-track: #141518;
   --v10-flow-thumb: var(--v10-primary);
@@ -74,7 +74,7 @@ html[data-v10-theme='paper'],
   --v10-text: #252b31;
   --v10-muted: #515e6a;
   --v10-subtle: #596874;
-  --v10-brand: #007589;
+  --v10-brand: #1f78b4;
   --v10-on-brand: #ffffff;
   --v10-success: #24734d;
   --v10-warning: #98620a;
@@ -82,7 +82,7 @@ html[data-v10-theme='paper'],
   --v10-primary: #252b31;
   --v10-on-primary: #ffffff;
   --v10-hair: rgba(37,52,65,.08);
-  --v10-ring: rgba(0,126,148,.5);
+  --v10-ring: rgba(31,120,180,.5);
   --v10-soft: rgba(40,58,72,.055);
   --v10-soft-hover: rgba(40,58,72,.085);
   --v10-shadow: 0 0 0 1px rgba(37,52,65,.055), 0 16px 48px -12px rgba(39,57,72,.19);
@@ -112,9 +112,9 @@ html[data-v10-theme='paper'],
   --v10-icon-filter: brightness(0);
   --v10-primary-icon-filter: brightness(0) invert(1);
   --v10-add-form: #f1f4f6;
-  --v10-selection: #e3f2f5;
-  --v10-flow-accent: #007589;
-  --v10-flow-sheen: rgba(0,117,137,.14);
+  --v10-selection: #e6e9ec;
+  --v10-flow-accent: #1f78b4;
+  --v10-flow-sheen: rgba(31,120,180,.14);
   --v10-flow-track: rgba(40,58,72,.045);
   --v10-flow-thumb: #ffffff;
   --v10-flow-on-thumb: var(--v10-text);
@@ -145,7 +145,7 @@ html[data-aid-ui='home'] :is(:where(#aid-portal-root), .ant-modal-root, .ant-dra
   --ui-subtle: var(--v10-subtle);
   --ui-brand: var(--v10-brand);
   --ui-on-brand: var(--v10-on-brand);
-  --ui-brand-soft: color-mix(in srgb, var(--v10-brand) 12%, transparent);
+  --ui-brand-soft: color-mix(in srgb, var(--v10-text) 10%, transparent);
   --ui-primary: var(--v10-primary);
   --ui-on-primary: var(--v10-on-primary);
   --ui-hair: var(--v10-hair);
@@ -201,11 +201,12 @@ html[data-aid-ui='home'] :is(:where(#aid-portal-root), .ant-modal-root, .ant-dra
   --primary-700: var(--v10-text);
   --primary-800: var(--v10-text);
   --primary-900: var(--v10-bg);
-  --accent-50: color-mix(in srgb, var(--v10-brand) 6%, transparent);
-  --accent-100: color-mix(in srgb, var(--v10-brand) 12%, transparent);
-  --accent-200: color-mix(in srgb, var(--v10-brand) 16%, transparent);
-  --accent-300: color-mix(in srgb, var(--v10-brand) 24%, transparent);
-  --accent-400: color-mix(in srgb, var(--v10-brand) 42%, transparent);
+  /* Tinted fills stay neutral; only solid accent steps carry the brand hue. */
+  --accent-50: color-mix(in srgb, var(--v10-text) 5%, transparent);
+  --accent-100: color-mix(in srgb, var(--v10-text) 10%, transparent);
+  --accent-200: color-mix(in srgb, var(--v10-text) 14%, transparent);
+  --accent-300: color-mix(in srgb, var(--v10-text) 20%, transparent);
+  --accent-400: color-mix(in srgb, var(--v10-text) 36%, transparent);
   --accent-500: var(--v10-brand);
   --accent-600: var(--v10-brand);
   --accent-700: var(--v10-brand);

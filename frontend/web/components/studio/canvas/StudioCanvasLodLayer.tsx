@@ -14,6 +14,7 @@ import { useStudioFreeTheme } from '../theme/StudioFreeThemeProvider'
 
 export interface StudioCanvasLodLayerHandle {
   draw: (viewport: Viewport) => void
+  connectionTargetAt: (point: XYPosition) => { id: string; x: number; y: number } | null
 }
 
 interface StudioCanvasLodLayerProps {
@@ -71,7 +72,22 @@ export const StudioCanvasLodLayer = forwardRef<StudioCanvasLodLayerHandle, Studi
     })
   }, [])
 
-  useImperativeHandle(ref, () => ({ draw }), [draw])
+  useImperativeHandle(ref, () => ({
+    draw,
+    connectionTargetAt(point) {
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return null
+      const localPoint = { x: point.x - rect.left, y: point.y - rect.top }
+      const current = viewportRef.current
+      const node = findHitNode(scene.cards, current, localPoint)
+      if (!node) return null
+      return {
+        id: node.id,
+        x: rect.left + current.x + node.position.x * current.zoom,
+        y: rect.top + current.y + (node.position.y + studioNodeDimensions(node).height / 2) * current.zoom
+      }
+    }
+  }), [draw, scene])
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return

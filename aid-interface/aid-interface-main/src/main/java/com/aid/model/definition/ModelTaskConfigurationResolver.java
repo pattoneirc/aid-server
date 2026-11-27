@@ -23,9 +23,12 @@ public class ModelTaskConfigurationResolver {
         if (task == null || task.getModelName() == null) return null;
         String snapshot = task.getProviderRouteSnapshotJson();
         if (ModelTaskRouteSnapshot.supports(snapshot)) {
-            Long modelId = JSON.parseObject(snapshot).getLong("id");
-            return ModelTaskRouteSnapshot.restore(snapshot,
-                    configurations.selectTaskCredentials(modelId, task.getModelName(), task.getUserId()));
+            var route = JSON.parseObject(snapshot);
+            Long modelId = route.getLong("id");
+            Long revision = route.getLong("dedicatedConnectionRevision");
+            return ModelTaskRouteSnapshot.restore(snapshot, revision == null
+                    ? configurations.selectTaskCredentials(modelId, task.getModelName(), task.getUserId())
+                    : configurations.selectDedicatedTaskCredentials(modelId, task.getModelName(), revision));
         }
         if (snapshot != null && !snapshot.isBlank()) return TokenDanceTaskRouteSnapshot.restore(snapshot, tokenDanceCredentials);
         if (ComposeConstants.MEDIA_TYPE_COMPOSE.equals(task.getMediaType())) return configurations.selectByModelCode(task.getModelName());
@@ -42,6 +45,7 @@ public class ModelTaskConfigurationResolver {
         }
         var snapshot = JSON.parseObject(task.getProviderRouteSnapshotJson());
         Long modelId = snapshot.getLong("id");
+        if (snapshot.getLong("dedicatedConnectionRevision") != null) return resolve(task);
         String capabilityCode = snapshot.getString("capabilityCode");
         String bindingCode = snapshot.getString("bindingCode");
         AiModelConfigVo current = (capabilityCode == null || capabilityCode.isBlank())

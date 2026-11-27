@@ -21,7 +21,7 @@ import com.aid.common.core.domain.BaseEntity;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@ToString(callSuper = true)
+@ToString(callSuper = true, exclude = "dedicatedApiKey")
 @TableName(value = "aid_ai_model")
 public class AidAiModel extends BaseEntity implements Serializable
 {
@@ -37,6 +37,20 @@ public class AidAiModel extends BaseEntity implements Serializable
     /** 所属服务商ID (关联 aid_ai_provider.id) */
     @Excel(name = "所属服务商ID (关联 aid_ai_provider.id)")
     private Long providerId;
+
+    /** 使用该模型的连接配置。 */
+    private Boolean dedicatedConnectionEnabled;
+
+    @com.fasterxml.jackson.annotation.JsonProperty(access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+    private Long dedicatedConnectionRevision;
+
+    @TableField(exist = false)
+    private String dedicatedBaseUrl;
+
+    @TableField(exist = false)
+    @com.fasterxml.jackson.annotation.JsonProperty(access = com.fasterxml.jackson.annotation.JsonProperty.Access.WRITE_ONLY)
+    @com.alibaba.fastjson2.annotation.JSONField(serialize = false)
+    private String dedicatedApiKey;
 
     /** 模型真实调用代码 (如: gpt-4o, seedance-v2)。前端展示/选择码，全表唯一（如 gpt5.4_a、gpt5.4_b） */
     @Excel(name = "模型真实调用代码 (如: gpt-4o, seedance-v2)")

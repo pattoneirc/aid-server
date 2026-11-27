@@ -1,4 +1,5 @@
 "use client";
+import { digestSha256Hex } from "@/utils/sha256";
 import {useEffect,useMemo,useState} from "react";
 import {Modal} from "antd";
 import {createPrevizWorkspaceApi} from "@/utils/previz/remoteWorkspace";
@@ -20,7 +21,7 @@ export function PrevizPreviewResult({projectId,stepId}:{projectId:string;stepId:
       if(media.contentBase64.length>Math.ceil(maxPreviewBytes/3)*4||!['image/png','image/jpeg'].includes(media.mimeType))throw new Error("预览图片格式无效");
       const bytes=Uint8Array.from(atob(media.contentBase64),char=>char.charCodeAt(0));
       if(bytes.length>maxPreviewBytes)throw new Error("预览图片超过大小限制");
-      const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');
+      const digest = await digestSha256Hex(bytes);
       if(digest!==result.sha256||digest!==media.sha256)throw new Error("预览图片校验失败");
       if(!active)return;
       url=URL.createObjectURL(new Blob([bytes],{type:media.mimeType}));setImage(url);

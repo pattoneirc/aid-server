@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { XYPosition } from '@xyflow/react'
+import { studioConnectionPreviewPath } from '@/utils/studio/studioConnectionHandle'
 
 const pendingConnectionAnchorSelector = (side: 'source' | 'target') =>
   `[data-studio-connection-anchor="${side}"]`
@@ -15,6 +16,7 @@ export function StudioPendingConnectionLine({
   side: 'source' | 'target'
   end: XYPosition
 }) {
+  const { x: endX, y: endY } = end
   const [path, setPath] = useState('')
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -41,9 +43,7 @@ export function StudioPendingConnectionLine({
             x: (side === 'source' ? nodeRect.right : nodeRect.left) - canvasRect.left,
             y: nodeRect.top + nodeRect.height / 2 - canvasRect.top
           }
-      const bend = Math.max(56, Math.abs(end.x - start.x) * 0.45)
-      const direction = side === 'source' ? 1 : -1
-      const nextPath = `M ${start.x} ${start.y} C ${start.x + bend * direction} ${start.y}, ${end.x - bend * direction} ${end.y}, ${end.x} ${end.y}`
+      const nextPath = studioConnectionPreviewPath(start, { x: endX, y: endY }, side)
       setPath((currentPath) => currentPath === nextPath ? currentPath : nextPath)
     }
     update()
@@ -57,7 +57,7 @@ export function StudioPendingConnectionLine({
       observer?.disconnect()
       window.removeEventListener('resize', update)
     }
-  }, [end.x, end.y, nodeId, side])
+  }, [endX, endY, nodeId, side])
 
   return (
     <svg ref={svgRef} className="studio-pending-connection" aria-hidden>

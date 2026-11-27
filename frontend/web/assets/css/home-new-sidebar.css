@@ -227,7 +227,7 @@
   padding: 3px 0;
   border: 0;
   border-top: 1px solid var(--v10-hair);
-  background: color-mix(in srgb, var(--v10-brand) 10%, var(--v10-s1));
+  background: color-mix(in srgb, var(--v10-text) 6%, var(--v10-s1));
   color: var(--v10-brand);
   font: inherit;
   font-size: 10px;
@@ -236,7 +236,7 @@
   cursor: pointer;
 }
 .home-new-credit-card__recharge:hover {
-  background: color-mix(in srgb, var(--v10-brand) 20%, var(--v10-s1));
+  background: color-mix(in srgb, var(--v10-text) 12%, var(--v10-s1));
 }
 .home-new-credit-card__recharge:focus-visible { outline: 2px solid var(--v10-brand); outline-offset: -3px; }
 .home-new-invite-gift:focus-visible { outline: 2px solid var(--v10-brand); outline-offset: 1px; }

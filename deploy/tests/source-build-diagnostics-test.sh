@@ -69,7 +69,7 @@ USE_DOCKER=no
 GIT_IMAGE='alpine/git:test'
 TAG=vclone-test
 SOURCE_BASE="${fixture_forge}"
-SOURCE_FORGE=gitee
+SOURCE_FORGE=atomgit
 SOURCE_PROBE_OK=yes
 SERVER_REPO=aid-studio
 WORK_DIR="${TMP_ROOT}/host-clone-work"
@@ -93,7 +93,7 @@ resolved_fixture_commit="$(resolve_remote_tag_commit "${fixture_bare}")"
   || { echo 'FAIL: annotated tag must resolve to its peeled commit' >&2; exit 1; }
 
 # 模拟 git clone 返回成功但工作树丢失 package.json。校验必须先将其归类为
-# 本地检出不完整，再清理并使用同一 Gitee 地址的显式 tag fetch 修复。
+# 本地检出不完整，再清理并使用同一 AtomGit 地址的显式 tag fetch 修复。
 eval "$(declare -f clone_tag_shortcut | sed '1s/clone_tag_shortcut/original_clone_tag_shortcut/')"
 clone_tag_shortcut() {
   original_clone_tag_shortcut "$@" || return 1
@@ -108,8 +108,8 @@ if ! retry_output="$(clone_repo aid-studio "${WORK_DIR}/repos/server" \
 fi
 grep -Fq '本地工作树检出不完整' <<< "${retry_output}" \
   || { echo 'FAIL: incomplete worktree was not diagnosed separately' >&2; exit 1; }
-grep -Fq 'gitee 显式拉取 refs/tags/vclone-test 并 detached checkout，不切换源' <<< "${retry_output}" \
-  || { echo 'FAIL: Gitee did not retry the exact tag before forge fallback' >&2; exit 1; }
+grep -Fq 'atomgit 显式拉取 refs/tags/vclone-test 并 detached checkout，不切换源' <<< "${retry_output}" \
+  || { echo 'FAIL: AtomGit did not retry the exact tag before forge fallback' >&2; exit 1; }
 [[ -f "${WORK_DIR}/repos/server/frontend/admin/package.json" \
     && -f "${WORK_DIR}/repos/server/frontend/admin/package-lock.json" \
     && -f "${WORK_DIR}/repos/server/frontend/web/package.json" \
@@ -120,21 +120,21 @@ grep -Fq 'gitee 显式拉取 refs/tags/vclone-test 并 detached checkout，不�
 eval "$(declare -f original_clone_tag_shortcut | sed '1s/original_clone_tag_shortcut/clone_tag_shortcut/')"
 unset -f original_clone_tag_shortcut
 
-# select_forge 和后续 ls-remote 都暂时不可用时，仍必须在 Gitee 同源完成
+# select_forge 和后续 ls-remote 都暂时不可用时，仍必须在 AtomGit 同源完成
 # 一次精确 refspec fetch；fetch 成功后用本地 tag^{commit} 校验 HEAD/tree/工作树。
 eval "$(declare -f probe_forge | sed '1s/probe_forge/original_probe_forge/')"
 probe_forge() { return 1; }
 FORGE=auto
-GITEE_BASE="${fixture_forge}"
+ATOMGIT_BASE="${fixture_forge}"
 GITHUB_BASE="${TMP_ROOT}/unused-github"
 select_output_file="${TMP_ROOT}/select-forge.log"
 select_forge > "${select_output_file}" 2>&1
 select_output="$(<"${select_output_file}")"
-[[ "${SOURCE_FORGE}" == gitee && "${SOURCE_BASE}" == "${fixture_forge}" \
+[[ "${SOURCE_FORGE}" == atomgit && "${SOURCE_BASE}" == "${fixture_forge}" \
     && "${SOURCE_PROBE_OK}" == no ]] \
-  || { echo 'FAIL: failed Gitee probe switched forge before same-source explicit retry' >&2; exit 1; }
+  || { echo 'FAIL: failed AtomGit probe switched forge before same-source explicit retry' >&2; exit 1; }
 grep -Fq '复核失败后才切换 GitHub' <<< "${select_output}" \
-  || { echo 'FAIL: failed Gitee probe did not explain same-source retry order' >&2; exit 1; }
+  || { echo 'FAIL: failed AtomGit probe did not explain same-source retry order' >&2; exit 1; }
 eval "$(declare -f original_probe_forge | sed '1s/original_probe_forge/probe_forge/')"
 unset -f original_probe_forge
 
