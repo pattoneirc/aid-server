@@ -40,6 +40,8 @@ public class AudioAssetListRequest {
     /** 来源（可选：1 AI生成 / 2 用户上传） */
     private Integer audioSource;
 
+    private Boolean personalVoiceOnly;
+
     /** 删除标志（后台可选：0未删除 / 2已删除，C端忽略） */
     private String delFlag;
 }

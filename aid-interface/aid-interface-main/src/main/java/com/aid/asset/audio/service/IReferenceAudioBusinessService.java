@@ -1,6 +1,7 @@
 package com.aid.asset.audio.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.aid.asset.audio.dto.ReferenceAudioDeleteRequest;
 import com.aid.asset.audio.dto.ReferenceAudioListRequest;
@@ -26,6 +27,9 @@ public interface IReferenceAudioBusinessService {
      * @return 登记后的参考音频
      */
     ReferenceAudioVO upload(ReferenceAudioUploadRequest request, Long userId);
+
+    /** 校验并上传录音原文件，返回本项目内可用于对口型的参考音频。 */
+    ReferenceAudioVO uploadFile(MultipartFile file, Long projectId, Long episodeId, Long userId);
 
     /**
      * 参考音频分页列表（硬过滤当前用户 + 项目 + del_flag=0）。

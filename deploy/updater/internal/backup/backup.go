@@ -33,7 +33,11 @@ type Snapshot struct {
 	// DBDumpFile 数据库备份文件（未启用数据库配置时为空）
 	DBDumpFile string `json:"dbDumpFile,omitempty"`
 	// DBSchemaFingerprint 用于确认失败恢复后没有残留迁移新建对象或字段。
-	DBSchemaFingerprint string `json:"dbSchemaFingerprint,omitempty"`
+	DBSchemaFingerprint string            `json:"dbSchemaFingerprint,omitempty"`
+	Version             string            `json:"version,omitempty"`
+	CreatedAt           time.Time         `json:"createdAt,omitempty"`
+	SizeBytes           int64             `json:"sizeBytes,omitempty"`
+	Digests             map[string]string `json:"digests,omitempty"`
 }
 
 // RestoreDatabase 将快照中的数据库备份恢复到当前数据库。
@@ -59,7 +63,7 @@ func RestoreDatabase(cfg *config.Config, s *Snapshot) error {
 	return nil
 }
 
-// Create 备份当前部署的三端产物与（可选）数据库，并按保留份数清理过期备份。
+// Create captures the deployment without rotating any previous snapshots.
 func Create(cfg *config.Config, tag string) (snapshot *Snapshot, err error) {
 	backupRoot, err := prepareBackupRoot(cfg.BackupDir)
 	if err != nil {
@@ -68,7 +72,7 @@ func Create(cfg *config.Config, tag string) (snapshot *Snapshot, err error) {
 	dir := filepath.Join(backupRoot, fmt.Sprintf("%s-%s", time.Now().Format("20060102150405.000000000"), safeTag(tag)))
 	// 备份候选必须由本进程新建。使用 Mkdir 而不是 MkdirAll，避免跟随同名软链接
 	// 或复用来源不明的既有目录。
-	if err := os.Mkdir(dir, 0o755); err != nil {
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("创建备份目录失败: %w", err)
 	}
 	// 备份中途失败时删除半成品目录：残留会被当作有效备份挤占保留份数
@@ -79,29 +83,29 @@ func Create(cfg *config.Config, tag string) (snapshot *Snapshot, err error) {
 			}
 		}
 	}()
-	snapshot = &Snapshot{Dir: dir}
+	snapshot = &Snapshot{Dir: dir, CreatedAt: time.Now()}
 
 	if fileExists(cfg.Install.BackendJar) {
-		if err := copyFile(cfg.Install.BackendJar, filepath.Join(dir, "aid-admin.jar")); err != nil {
+		if err := copyFile(cfg.Install.BackendJar, filepath.Join(dir, "aid-admin.jar"), 0); err != nil {
 			return nil, fmt.Errorf("备份服务端jar失败: %w", err)
 		}
 		snapshot.HasJar = true
 	}
 	buildInfoPath := filepath.Join(filepath.Dir(cfg.Install.BackendJar), "build-info.json")
 	if fileExists(buildInfoPath) {
-		if err := copyFile(buildInfoPath, filepath.Join(dir, "build-info.json")); err != nil {
+		if err := copyFile(buildInfoPath, filepath.Join(dir, "build-info.json"), 0); err != nil {
 			return nil, fmt.Errorf("备份版本标记失败: %w", err)
 		}
 		snapshot.HasBuildInfo = true
 	}
 	if cfg.Install.AdminDist != "" && dirExists(cfg.Install.AdminDist) {
-		if err := copyDir(cfg.Install.AdminDist, filepath.Join(dir, "admin-dist")); err != nil {
+		if err := copyStaticAssets(cfg.Install.AdminDist, filepath.Join(dir, "admin-dist")); err != nil {
 			return nil, fmt.Errorf("备份管理端失败: %w", err)
 		}
 		snapshot.HasAdminDist = true
 	}
 	if cfg.Install.WebDist != "" && dirExists(cfg.Install.WebDist) {
-		if err := copyDir(cfg.Install.WebDist, filepath.Join(dir, "web-dist")); err != nil {
+		if err := copyStaticAssets(cfg.Install.WebDist, filepath.Join(dir, "web-dist")); err != nil {
 			return nil, fmt.Errorf("备份用户端失败: %w", err)
 		}
 		snapshot.HasWebDist = true
@@ -118,8 +122,6 @@ func Create(cfg *config.Config, tag string) (snapshot *Snapshot, err error) {
 		snapshot.DBDumpFile = dumpFile
 		snapshot.DBSchemaFingerprint = fingerprint
 	}
-	// 本次备份完整落盘后才清理过期备份：备份中途失败不能折损既有备份存量
-	pruneOldBackups(backupRoot, cfg.KeepBackups)
 	return snapshot, nil
 }
 
@@ -146,13 +148,13 @@ func Restore(cfg *config.Config, s *Snapshot) error {
 		return fmt.Errorf("无可用备份")
 	}
 	if s.HasJar {
-		if err := copyFile(filepath.Join(s.Dir, "aid-admin.jar"), cfg.Install.BackendJar); err != nil {
+		if err := copyFile(filepath.Join(s.Dir, "aid-admin.jar"), cfg.Install.BackendJar, 0); err != nil {
 			return fmt.Errorf("还原服务端jar失败: %w", err)
 		}
 	}
 	if s.HasBuildInfo {
 		buildInfoPath := filepath.Join(filepath.Dir(cfg.Install.BackendJar), "build-info.json")
-		if err := copyFile(filepath.Join(s.Dir, "build-info.json"), buildInfoPath); err != nil {
+		if err := copyFile(filepath.Join(s.Dir, "build-info.json"), buildInfoPath, 0); err != nil {
 			return fmt.Errorf("还原版本标记失败: %w", err)
 		}
 	} else {
@@ -183,7 +185,7 @@ func ReplaceDir(src, dst string) error {
 
 // CopyFile 覆盖复制单个文件（对外提供给任务执行器复用）。
 func CopyFile(src, dst string) error {
-	return copyFile(src, dst)
+	return copyFile(src, dst, 0)
 }
 
 // replaceDir 用 src 内容替换 dst 目录：保留 dst 目录本身只清空内容——
@@ -202,10 +204,10 @@ func replaceDir(src, dst string) error {
 		}
 	}
 	// 跨分区 rename 会失败，直接递归复制最稳妥
-	return copyDir(src, dst)
+	return copyStaticAssets(src, dst)
 }
 
-func copyFile(src, dst string) error {
+func copyFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -215,10 +217,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
+	if mode == 0 {
+		mode = info.Mode().Perm()
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
@@ -226,10 +231,13 @@ func copyFile(src, dst string) error {
 	if _, err := io.Copy(out, in); err != nil {
 		return err
 	}
+	if err := out.Chmod(mode); err != nil {
+		return err
+	}
 	return out.Sync()
 }
 
-func copyDir(src, dst string) error {
+func copyStaticAssets(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -240,13 +248,16 @@ func copyDir(src, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			return os.Chmod(target, 0o755)
 		}
 		if !d.Type().IsRegular() {
 			// 跳过符号链接等特殊文件
 			return nil
 		}
-		return copyFile(path, target)
+		return copyFile(path, target, 0o644)
 	})
 }
 

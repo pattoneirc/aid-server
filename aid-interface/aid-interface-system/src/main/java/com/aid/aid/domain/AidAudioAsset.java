@@ -59,6 +59,11 @@ public class AidAudioAsset extends BaseEntity implements Serializable
     @MediaUrl
     private String audioUrl;
 
+    private Integer durationMs;
+
+    @MediaUrl
+    private String avatarUrl;
+
     /** 文件大小（字节） */
     @Excel(name = "文件大小")
     private Long fileSize;

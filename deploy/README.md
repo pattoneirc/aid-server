@@ -38,7 +38,17 @@ deploy/
 if command -v curl >/dev/null 2>&1; then curl -fL --retry 3 -o aid-install.sh https://api.atomgit.com/api/v5/repos/shijue-aid/aid-studio/raw/deploy%2Faid.sh?ref=master; elif command -v wget >/dev/null 2>&1; then wget -O aid-install.sh https://api.atomgit.com/api/v5/repos/shijue-aid/aid-studio/raw/deploy%2Faid.sh?ref=master; else echo '请先安装 curl 或 wget'; false; fi && sudo env AID_REMOTE_BOOTSTRAP=1 bash aid-install.sh install
 ```
 
-这条命令不会把网络响应直接送入 Shell：只有 `curl/wget` 成功保存 `aid-install.sh` 后才执行。`AID_REMOTE_BOOTSTRAP=1` 表示本次必须使用刚下载的最新控制逻辑；在已部署服务器上不会被旧的受管脚本接管。`install` 是自动入口：未部署时执行推荐的 Docker 首次安装；检测到已经部署时自动改为检查并升级，不会重复初始化数据库。部署成功后还会安全创建 `sudo aid` 管理命令（如果系统已有同名命令则不覆盖）。随时执行 `sudo aid default` 可重新显示用户端、管理端、公网/内网、HTTPS 入口、数据库初始化管理员及 MySQL 连接信息；只查看 MySQL 时执行 `sudo aid mysql`。
+这条命令通过 GET 下载完整脚本，再执行已保存的文件。AtomGit Raw 用 GET 探测，HEAD 返回 404 时仍可正常下载。`AID_REMOTE_BOOTSTRAP=1` 使本次执行使用刚下载的控制逻辑。`install` 会在空机上执行 Docker 首次安装，已有部署则检查并升级。运维命令可用 `sudo /usr/local/bin/aid status`，适用于 sudo 的搜索路径未包含 `/usr/local/bin` 的发行版。`default` 显示入口，`mysql` 查看数据库连接信息。
+
+没有控制终端时，先核对实际配置文件，再使用显式非交互选项。以下示例允许安装 Docker，并同意本地存储的新装导入官方示例资源。已安装 Docker 时可省略安装授权。
+
+```bash
+sudo env AID_REMOTE_BOOTSTRAP=1 AID_ASSUME_YES=1 AID_CONFIG_CONFIRMED=1 \
+  AID_AUTO_INSTALL_DOCKER=yes AID_IMPORT_OFFICIAL_ASSETS=y \
+  bash aid-install.sh install-docker
+```
+
+`AID_IMPORT_OFFICIAL_ASSETS=n` 跳过自动导入。已知对外访问地址时，可同时传入 `AID_LOCAL_RESOURCE_ORIGIN=http://你的服务器地址`，含自定义端口时一并填写。仅全新安装、存储为本地且地址未设置时生效。HTTPS 和模型凭证按实际站点和供应商配置。
 
 AtomGit 原始文件访问失败时，可改用 GitHub 备用地址：
 
@@ -56,9 +66,11 @@ if command -v curl >/dev/null 2>&1; then curl -fL --retry 3 -o aid-install.sh ht
 
 ### 导入官方资源包
 
-Docker 和手动部署首次安装完成、服务健康检查通过后，本地存储用户可以选 **y** 下载并导入官方资源包。默认 **n**，直接回车或退出也会跳过本步骤。升级、重新部署和非交互安装均跳过提示。计划使用 COS、OSS 或其他对象存储时，请跳过自动导入，再按教程上传到所选存储。
+Docker 和手动部署首次安装完成、服务健康检查通过后，本地存储用户可选 **y** 下载并导入官方资源包。交互默认 **n**。无人值守安装中，可用 `AID_IMPORT_OFFICIAL_ASSETS=y` 请求自动导入，或用 `n` 跳过。升级、重新部署和云存储使用手动路径。
 
-自动导入只尝试一次，校验归档和其中每个文件的 SHA-256。下载或校验失败时，系统仍可使用。需要手动导入时，下载资源包，通过后台「项目升级配置 → 官方资源」上传到本地存储；使用云存储时按你的存储配置上传包内资源。[下载官方资源包](https://atomgit.com/shijue-aid/aid-studio/releases/download/v3.0.0/aid-official-assets_1.0.0-beta.2.tar.gz)
+无人值守部署使用现有的 `AID_ASSUME_YES=1` 与 `AID_CONFIG_CONFIRMED=1`。仅在用户已经允许安装或升级 Docker 时传入 `AID_AUTO_INSTALL_DOCKER=yes`。按实际部署范围决定各项的值。
+
+自动导入只尝试一次，校验归档和其中每个文件的 SHA-256。文件清单支持 LF 和 CRLF。下载、校验或导入失败时，脚本会提示手动导入，系统仍可使用。需要手动导入时，下载资源包，通过后台「项目升级配置 → 官方资源」上传到本地存储；使用云存储时按实际存储配置上传包内资源。 [下载官方资源包](https://atomgit.com/shijue-aid/aid-studio/releases/download/v3.0.0/aid-official-assets_1.0.0-beta.2.tar.gz)
 
 ### 使用最新远程脚本更新
 
@@ -88,7 +100,7 @@ sudo env AID_REMOTE_BOOTSTRAP=1 AID_RELEASE_CHANNEL=beta bash aid-install.sh upd
 
 - 脚本只接受 HTTPS 版本清单，并只拉取 AID 官方 GitHub/AtomGit 统一公开仓；三端必须来自同一个 `v<版本>` 标签，禁止混用分支或平台。构建后的本地包仍会检查目录结构、路径穿越、特殊链接和内置脚本语法。
 - OpenSSL 支持 Ed25519 `pkeyutl -rawin` 时会验证清单签名；较老的 OpenSSL 会以黄色信息明确提示。高安全环境建议升级 OpenSSL，后台在线升级器始终执行完整签名校验。
-- 脚本不会静默开放防火墙、修改 DNS/域名、配置 HTTPS 证书、删除已有数据库，也不会自动导入大体积官方资产包。Docker 缺失或版本过低时会先单独提示对现有容器的风险，只有管理员明确同意后才配置软件源并安装/升级。
+- 脚本不会静默开放防火墙、修改 DNS/域名、配置 HTTPS 证书或删除已有数据库。官方资源包仅在全新本地存储安装明确选择导入后下载。Docker 缺失或版本过低时会先单独提示对现有容器的风险，只有管理员明确同意后才配置软件源并安装/升级。
 - 发现 `/data/aid` 已有非安装缓存内容、版本降级、数据库恢复、低于推荐硬件等情况时，默认拒绝或要求再次确认。`AID_ASSUME_YES=1` 只应在你已做好外部备份且明确授权的自动化环境使用。
 - 本机备份不能替代异机备份。上线前应把数据库、`/data/aid/uploadPath` 和配置文件定期备份到另一台机器或对象存储。
 
@@ -102,7 +114,7 @@ sudo env AID_REMOTE_BOOTSTRAP=1 AID_RELEASE_CHANNEL=beta bash aid-install.sh upd
   1) 一键首次部署（Docker，源码构建，推荐）
   2) 首次部署（手动 systemd，源码构建）
   3) 自动检查并升级到当前渠道最新版（升级前完整备份）
-  4) 回滚到升级前备份（最近 3 份可选）
+  4) 从本机版本备份回退
   5) 重启服务（配置变更后生效）
   6) 停止服务
   7) 查看状态
@@ -122,8 +134,8 @@ sudo env AID_REMOTE_BOOTSTRAP=1 AID_RELEASE_CHANNEL=beta bash aid-install.sh upd
 - **配置真源清晰**：首次部署自动从模板创建正式配置——单文件 Docker 部署默认使用 `/data/aid/config/docker.env`，手动部署使用 `/data/aid/aid-deploy.conf`；最终以脚本打印和 `/data/aid/config/deployment.json` 指向的绝对路径为准。密码和密钥留空时生成强随机值，后续只修改这一份正式配置
 - **配置变更受控**：后台「项目升级配置 → 运行配置」只展示脱敏字段，可校验、应用或恢复上一份配置；升级器会先备份配置，原子写入后重启并健康检查，失败自动恢复。自定义配置文件只能位于 `/data/aid/config`，禁止软链接和任意路径读写
 - **资源全部可调**：后端 JVM、MySQL 缓冲池、Redis 内存上限、RocketMQ Broker/NameServer 内存（镜像默认 8G 大堆已按 1G 覆盖）在部署时逐项询问，回车用默认值
-- **自动更新（菜单 3）**：按已保存渠道读取最新版本；相同版本直接提示已是最新，远端版本较低时拒绝自动降级；确认后才拉取标签并构建，且**升级前自动做完整备份**（程序产物 + 数据库全量 + 版本标记，保留最近 3 份）；构建包内增量 SQL 自动执行
-- **回滚（菜单 4）**：从最近 3 份升级前备份中选择还原——程序产物直接还原；数据库默认不还原（避免丢失升级后产生的业务数据），需要时显式确认还原；回滚前还会对当前状态再做一份保护备份，误操作可救
+- **自动更新（菜单 3）**按已保存渠道读取版本。确认后拉取标签并构建。完整备份通过校验后才执行增量 SQL 和替换程序。
+- **版本回退（菜单 4）**可选择本机版本备份。回退前先保护当前三端和数据库，确认后恢复所选备份中的三端和数据库时间点。
 - **在线升级器自动安装**：源码构建包内置当前版本升级器二进制，两种部署方式首次部署都会自动装好（Docker 为编排内 `aid-updater` 容器，手动为 systemd 服务），部署完成即可用后台页面一键升级；损坏时菜单 11（或 `sudo aid setup-updater`）会从签名清单下载当前架构的小型升级器并完成健康检查
 - **升级进度可见**：后台升级页首屏会显示黑色实时终端、当前阶段、百分比与日志；命令行可用 `sudo aid progress` 查看同一任务。交互菜单只在确有升级、升级器升级或回退任务时显示进度入口
 - **禁止重复升级**：一个任务从待认领到最终成功/失败期间，后台按钮与服务端任务入口都会阻止再次升级或回退，`aid update` / `aid rollback` 同样会检查在线任务，避免覆盖任务文件或并行切换版本
@@ -205,9 +217,11 @@ Docker 构建固定使用 Node.js 22.22.0；后台管理端和 Web 用户端还�
 
 `DEPENDENCY_REGION=auto` 会在目标服务器运行时按公网出口地区自动选择下载线路，地区服务不可用时再按网络可达性判断：国内依赖优先使用国内镜像，国际线路优先使用上游官方地址。Maven 在两种线路下均固定优先使用阿里云公共仓库，失败时自动用原始 Maven Central 重新构建；可通过 `AID_MAVEN_MIRROR_URL` 与 `AID_MAVEN_FALLBACK_URL` 分别覆盖。其他首选线路失败也会自动回退，且可明确设置为 `cn` 或 `global`。
 
-Docker Hub 代理由正式配置项 `DOCKER_MIRRORS` 管理，默认候选为 `docker.m.daocloud.io,dockerproxy.net`。脚本先对所有候选 Registry 的 `/v2/` 接口进行短连接测速，再对当前要下载的具体镜像执行限时 manifest 预检：清单可用的来源优先，预检失败的来源保留在末尾兜底，真实拉取失败仍会继续尝试下一来源。这样可以识别“Registry 首页可访问，但 MySQL 分层存储不可用”的假可用节点。代理按标签下载后还必须匹配发布脚本内固定的官方 RepoDigest，否则立即拒绝该内容并继续回退。多个地址使用英文逗号分隔，最多 8 个；支持云厂商分配的专属加速域名，不允许在该配置中放入账号、密码或 URL 查询参数。旧版 `AID_DOCKER_CN_MIRROR` 环境变量仍兼容，但新部署应使用 `DOCKER_MIRRORS`。
+Docker Hub 代理由 `DOCKER_MIRRORS` 管理，默认候选为 `docker.m.daocloud.io`。脚本先对候选 Registry 的 `/v2/` 测速。固定镜像用同一个官方摘要进行 manifest 预检和实际拉取。预检失败跳过该来源，拉取失败尝试下一来源，下载后再核对本地摘要。未固定摘要的自定义标签仍允许在预检失败后尝试拉取。多个地址使用英文逗号分隔，最多 8 个，可使用云厂商提供的专属加速域名，配置里只填写 Registry 前缀。旧版 `AID_DOCKER_CN_MIRROR` 环境变量仍可读取。
 
 三端构建不再隐藏 Maven 输出，并会分别打印服务端、后台管理端、Web 用户端的依赖安装、编译和完成状态。通过 `aid.sh` 部署或更新时，终端实时显示同一份日志，并以 `source-build-v<版本>-<时间>.log` 保存到 `/data/aid/logs/`；后台一键升级时，相同输出会进入升级器的 `updater.log`。
+
+构建器出包后回收本次源码、`node_modules`、编译产物和打包暂存。安装或升级结束后回收自动生成的本地安装包、解包目录及下载残片。部署失败时仍执行临时文件清理，中断后会在下一次命令行运行或升级器恢复时按任务归属回收。运行程序、共享依赖缓存、在用 Swap、有效回滚备份和用户提供的本地包继续保留。
 
 只有离线部署或开发调试时才需要自行准备本地包，已安装环境可通过 `sudo aid install-docker /path/to/aid-vX.Y.Z.tar.gz` 使用；首次离线安装则执行实际下载到的脚本绝对路径。因为外部本地包不在在线签名链路中，脚本会以红色风险信息提示，只做结构校验。
 
@@ -242,8 +256,7 @@ sudo mkdir -p /etc/docker
 sudo tee /etc/docker/daemon.json <<'EOF'
 {
   "registry-mirrors": [
-    "https://docker.m.daocloud.io",
-    "https://dockerproxy.net"
+    "https://docker.m.daocloud.io"
   ]
 }
 EOF
@@ -282,13 +295,25 @@ AID 不读取、替换或删除系统原有 FFmpeg，也不再通过 apt、yum�
 
 下载、解压、能力检测和 1 秒音视频合成都在 `/opt/aid-ffmpeg` 的临时安装区完成；只有全部通过才原子更新 `current`。网络中断、SHA256 不符或能力不完整时不会替换原运行时。重复执行会复检并复用完整版本，文件损坏时重新下载。统一检测包含最低版本 5.1、`libx264`、`libx265`、`aac`，以及 `tpad`、`apad`、`scale`、`pad`、`fps`、`setpts`、`concat`、`overlay`、`drawtext`、`amix`、`alimiter`、`aresample`、`atrim`、`asetpts`、`aformat`。
 
-固定主地址使用不可变版本制品。若维护者已把相同文件上传到腾讯云 COS 或阿里云 OSS，可在执行安装命令时设置对应架构的 `AID_FFMPEG_TENCENT_URL_AMD64` / `AID_FFMPEG_TENCENT_URL_ARM64`、`AID_FFMPEG_ALIYUN_URL_AMD64` / `AID_FFMPEG_ALIYUN_URL_ARM64`；所有镜像必须提供同一字节文件，仍使用脚本内置 SHA256 验证。没有真实对象地址时不要填写，脚本不会使用虚构或可变镜像链接。
+Docker 与手动安装默认按 **AtomGit 3.0.0 发行附件 → AID 官方 CDN → GitHub 固定发行附件** 下载。下载失败或 SHA256 不符时自动尝试下一来源。用户可通过 `AID_FFMPEG_PRIMARY_URL_AMD64` / `AID_FFMPEG_PRIMARY_URL_ARM64` 指定首选源；显式配置的 Tencent COS 或 Aliyun OSS 镜像（`AID_FFMPEG_TENCENT_URL_AMD64` / `AID_FFMPEG_TENCENT_URL_ARM64`、`AID_FFMPEG_ALIYUN_URL_AMD64` / `AID_FFMPEG_ALIYUN_URL_ARM64`）在官方 CDN 之后、GitHub 之前尝试。所有来源均使用同一固定版本和内置 SHA256。[amd64 CDN](https://cdn.aidstudio.com.cn/aid/release/ffmpeg/8.1.2/ffmpeg-8.1.2-amd64-static.tar.xz) · [arm64 CDN](https://cdn.aidstudio.com.cn/aid/release/ffmpeg/8.1.2/ffmpeg-8.1.2-arm64-static.tar.xz)
 
-Docker 和手动安装自动优先使用 AtomGit 的 3.0.0 发行版附件，按架构下载并验证固定的 SHA-256。手动指定的首选源优先，下载或校验失败时依次尝试备用源。[AtomGit 3.0.0 发行版](https://atomgit.com/shijue-aid/aid-studio/releases/tag/v3.0.0)
-
-固定制品由 John Van Sickle 的 Linux 静态构建原样归档，按 GPLv3 提供；版本归档同时公布双架构 SHA256 与对应 FFmpeg 源码地址。AID 仅在部署时下载并隔离使用该运行时，不覆盖系统二进制。[原始制品和源码说明](https://github.com/shijue-aid/aid-studio/releases/tag/v1.0.0-beta.6)
+固定制品由 John Van Sickle 的 Linux 静态构建原样归档，按 GPLv3 提供；版本归档同时公布双架构 SHA256 与对应 FFmpeg 源码地址。AID 仅在部署时下载并隔离使用该运行时，不覆盖系统二进制。
 
 初始化 SQL、升级 SQL、Docker 与手动部署均使用上述固定路径，用户无需安装后再修改后台。填写其他路径时必须同时提供容器或宿主机内可见的可执行绝对路径，保存时会校验版本、编码器、滤镜与最小合成。
+
+### 运行依赖合包
+
+`aid-runtime-bundle_3.0.0.tar` 收录 amd64 与 arm64 的 FFmpeg 8.1.2 和升级器 3.0.0 原附件。安装器按宿主机架构取件，先校验整个合包，再按原 SHA-256 校验所需附件。Docker 和手动部署共用这段逻辑。
+
+AtomGit 的 v3.0.0 发行版提供同名附件后，安装器会在准备 FFmpeg 时优先尝试这个包。同一次部署需要下载升级器附件时会复用合包，合包不可用时继续原有分件下载。单独修复升级器时直接使用对应架构的小附件。
+
+已经下载合包的用户可将绝对路径传给安装脚本。
+
+```bash
+sudo env AID_RUNTIME_BUNDLE_FILE=/absolute/path/aid-runtime-bundle_3.0.0.tar bash aid.sh install-docker
+```
+
+手动部署使用 `install-manual`。安装器临时下载的合包随部署工作目录清理，用户指定的本地文件继续由用户管理。
 
 ### 中文字体自动检测与初始化
 
@@ -308,7 +333,7 @@ Docker 与手动部署共用同一套字体管理器，稳定入口固定为：
 
 ```dotenv
 DEPENDENCY_REGION=auto
-DOCKER_MIRRORS=专属加速域名,docker.m.daocloud.io,dockerproxy.net
+DOCKER_MIRRORS=专属加速域名,docker.m.daocloud.io
 ```
 
 留空会使用安装器内置候选；原配置升级时会先在同目录备份，只补充缺少的 `DOCKER_MIRRORS`，不会覆盖已有值。部署后也可在后台管理的“系统升级 → 部署配置”中维护该列表。
@@ -326,7 +351,7 @@ Docker Nginx 不是写进宿主机 `/etc/nginx`：受管 HTTP 配置位于 `/dat
 - 用户端外网：`http://公网IP:HTTP_PORT/`；用户端内网：`http://内网IP:HTTP_PORT/`
 - 管理端外网：`http://公网IP:ADMIN_PORT/<随机访问码>`；管理端内网：`http://内网IP:ADMIN_PORT/<随机访问码>`
 - 部署完成页会自动识别并替换公网/内网 IPv4，不再输出含“服务器IP”的占位地址。公网探测失败时以云服务器控制台显示的公网 IPv4 为准；内网地址仅供同一 VPC、局域网或 VPN 内访问
-- 管理端默认账号为 `admin / admin123`，首次部署生成随机访问码并打印完整地址，**登录后立即修改密码**
+- 全新部署为默认账号 `admin` 生成随机初始密码，入口按配置打印。密码文件在实际数据根的 `config/initial-admin-password`，仅 root 可读。首次登录改密后删除该文件。
 
 忘记完整入口时执行：
 
@@ -334,7 +359,7 @@ Docker Nginx 不是写进宿主机 `/etc/nginx`：受管 HTTP 配置位于 `/dat
 sudo aid default
 ```
 
-该命令会从当前配置和数据库读取真实后台访问码，打印用户端、管理端的公网/内网及 HTTPS 地址，并显示当前 MySQL 主机、端口、库名、业务账号、业务密码以及内置 MySQL 的 root 密码。它只会显示 `sql/aid-init.sql` 定义的初始化账号 `admin / admin123` 并明确标注其性质；管理员修改后的后台登录密码以不可逆摘要保存，命令不会反查、回显或重置后台账号密码，也不会重新初始化数据库。若数据库未运行，命令会明确失败并提示先执行 `sudo aid restart`，不会用猜测的访问码拼接错误地址。数据库信息属于高敏感内容，命令只允许 root 执行，不要截图、转发或复制到公开日志。
+该命令读取真实后台访问码，显示实际站点入口，并给出初始密码文件的位置。管理员改密后以后台当前密码为准。该命令同时显示数据库连接信息，仅限服务器管理员查看。
 
 只查看数据库连接与账号信息时执行：
 
@@ -396,7 +421,7 @@ DB_PASSWORD=请填写真实强密码
 
 #### 使用 Navicat 连接 MySQL
 
-内置 MySQL 和手动部署的本机 MySQL 默认不向公网暴露 3306，这是有意的安全设计。Navicat 推荐启用“SSH 隧道”：SSH 主机填写服务器公网 IP、端口通常为 22，并使用服务器运维账号；MySQL 主机填写 `127.0.0.1`，Docker 模式端口填写 `MYSQL_PORT`，手动模式端口填写 `DB_PORT`；数据库、用户名分别使用 `DB_NAME`、`DB_USERNAME`。部署完成页会打印业务密码和内置 root 密码，之后可用 `sudo aid mysql` 再次查看；Docker 单文件部署通常使用 `/data/aid/config/docker.env`，手动部署使用 `/data/aid/aid-deploy.conf`，以安装完成页打印的实际路径为准。配置文件权限为 600，数据库信息同样不要复制到公开日志。
+内置 MySQL 和手动部署的本机 MySQL 默认仅在本机可访问。Navicat 可通过 SSH 隧道连接 `127.0.0.1`，Docker 模式使用 `MYSQL_PORT`，手动模式使用 `DB_PORT`。在服务器上用 `sudo /usr/local/bin/aid mysql` 查看连接信息。通常 Docker 的受控配置为 `/data/aid/config/docker.env`，手动部署为 `/data/aid/aid-deploy.conf`，以完成页显示的实际路径为准。
 
 使用外部 MySQL 时，Navicat 应连接数据库服务商提供的可访问地址，而不是 AID 服务器 IP。外部库仅开放内网时，应使用数据库所在网络的 SSH 跳板机、VPN 或云数据库代理。不要为了方便把 Docker Compose 的 MySQL 绑定从 `127.0.0.1` 改成 `0.0.0.0`，也不要向全网开放安全组 3306。
 
@@ -436,6 +461,16 @@ DB_PASSWORD=请填写真实强密码
 所有容器已统一配置日志轮转（单文件 50MB × 3 个），Docker 日志不会打满磁盘；MySQL 慢查询日志（>1s）自动记录在数据目录 `slow.log`。
 
 ### 备份与恢复
+
+#### 升级和回退使用的版本备份
+
+管理员可在「项目升级配置 → 版本回退」查看本机备份、设置备份目录与保留份数。首次安装默认使用 `/var/lib/aid-updater/backups` 并保留最近一份。自定义目录需要先在服务器上创建，Docker 部署还需保证该目录以同路径可写方式挂载给升级器。
+
+升级和回退前校验备份目录及可用空间，备份当前服务端、管理端、Web 和数据库。已有备份经校验与当前状态完全一致时可复用。备份失败会给出原因并中止切换。切换成功并通过健康检查后才轮换旧备份，回退后保留切换前运行的版本。恢复数据库会回到所选备份的时间点，请在确认前检查这段时间新增的业务数据。
+
+后台读取本机备份使用 `GET /aidconfig/upgrade/backups`。提交目录校验使用 `POST /aidconfig/upgrade/backups/settings`，字段为 `backupDir` 和 `keepBackups`，结果以升级器任务终态为准。恢复本机备份时向 `POST /aidconfig/upgrade/rollback` 提交目标 `targetVersion` 和列表中对应的 `backupId`。
+
+#### 定期备份业务数据与文件
 
 菜单 10（或 `sudo aid backup`）备份数据库全量 + 上传文件 + 部署配置到 `/data/aid/backups/<时间戳>/`，自动清理 7 天前的备份。每日自动备份：
 

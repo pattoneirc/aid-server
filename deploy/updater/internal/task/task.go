@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strings"
 )
 
 var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
@@ -16,6 +15,7 @@ const (
 	ActionUpgrade        = "UPGRADE"
 	ActionUpdaterUpgrade = "UPDATER_UPGRADE"
 	ActionRollback       = "ROLLBACK"
+	ActionBackupSettings = "BACKUP_SETTINGS"
 	ActionConfigValidate = "CONFIG_VALIDATE"
 	ActionConfigApply    = "CONFIG_APPLY"
 	ActionConfigRollback = "CONFIG_ROLLBACK"
@@ -56,7 +56,10 @@ type Task struct {
 	// BackupRequired 是否强制备份（ROLLBACK 附带）
 	BackupRequired bool `json:"backupRequired,omitempty"`
 	// KeepBackups 备份保留份数（后台「升级源配置」下发，0 表示沿用升级器本地配置）
-	KeepBackups int `json:"keepBackups,omitempty"`
+	KeepBackups  int    `json:"keepBackups,omitempty"`
+	BackupDir    string `json:"backupDir,omitempty"`
+	BackupID     string `json:"backupId,omitempty"`
+	localPackage string
 
 	// ConfigPath 为空时沿用当前部署配置路径；自定义路径只能位于升级器配置的白名单目录。
 	ConfigPath string `json:"configPath,omitempty"`
@@ -83,11 +86,11 @@ func Parse(path string) (*Task, error) {
 	if t.SchemaVersion != SupportedSchemaVersion {
 		return nil, fmt.Errorf("任务结构版本不支持: %d", t.SchemaVersion)
 	}
-	if !taskIDPattern.MatchString(strings.TrimSpace(t.TaskID)) {
+	if !taskIDPattern.MatchString(t.TaskID) {
 		return nil, fmt.Errorf("任务缺少 taskId")
 	}
 	switch t.Action {
-	case ActionUpgrade, ActionUpdaterUpgrade, ActionRollback,
+	case ActionUpgrade, ActionUpdaterUpgrade, ActionRollback, ActionBackupSettings,
 		ActionConfigValidate, ActionConfigApply, ActionConfigRollback,
 		ActionConfigTest, ActionCertInstall, ActionNginxValidate, ActionNginxApply, ActionNginxRollback:
 	default:

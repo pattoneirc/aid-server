@@ -12,6 +12,40 @@ export AID_PRIVATE_IP=10.20.30.40
 # shellcheck source=../aid.sh
 source "${ROOT_DIR}/deploy/aid.sh"
 
+# A generated receipt must satisfy the same length rule as admin login.
+(
+  REPO_DIR="${TMP_ROOT}/installer"
+  CONFIG_ROOT="${TMP_ROOT}/bootstrap-config"
+  mkdir -p "${REPO_DIR}/sql" "${CONFIG_ROOT}"
+  seedHash='$2b$10$'$(printf '%053d' 0)
+  newHash='$2b$10$'$(printf '%053d' 1)
+  printf "INSERT INTO \`sys_user\` VALUES (1, 103, 'admin', '%s');\n" "${seedHash}" > "${REPO_DIR}/sql/aid-init.sql"
+  maxLength="$(sed -n 's/.*PASSWORD_MAX_LENGTH = \([0-9][0-9]*\);/\1/p' \
+    "${ROOT_DIR}/aid-common/src/main/java/com/aid/common/constant/UserConstants.java")"
+  [[ -n "${maxLength}" ]]
+  stat() { printf '0:600:1\n'; }
+  htpasswd() {
+    local p
+    IFS= read -r p
+    [[ "${#p}" == "${maxLength}" ]] || return 1
+    printf 'admin:%s\n' "${newHash}"
+  }
+  first_install_mysql() {
+    local query
+    query="$(cat)"
+    case "${query}" in
+      'SELECT password '*) printf '%s\n' "${seedHash}" ;;
+      'UPDATE sys_user '*) [[ "${query}" == *"${newHash}"* ]] && printf '1\n' ;;
+      *) return 1 ;;
+    esac
+  }
+  configure_first_install_admin docker none >/dev/null
+  IFS= read -r firstPassword < "${CONFIG_ROOT}/initial-admin-password"
+  [[ "${#firstPassword}" == "${maxLength}" ]]
+  configure_first_install_admin docker none >/dev/null
+  [[ "$(cat "${CONFIG_ROOT}/initial-admin-password")" == "${firstPassword}" ]]
+)
+
 valid_ipv4 8.8.4.4
 valid_ipv4 10.20.30.40
 private_ipv4 10.20.30.40
@@ -67,24 +101,28 @@ conf_get() {
 
 MOCK_MODE=docker
 dockerOutput="$(print_access_info)"
+dockerDetails="$(print_access_info strict)"
 grep -Fq '用户端外网访问入口: http://8.8.4.4:80/' <<< "${dockerOutput}"
 grep -Fq '用户端内网访问入口: http://10.20.30.40:80/' <<< "${dockerOutput}"
 grep -Fq '管理端外网访问入口: http://8.8.4.4:8090/4Azs8kbhPL5e' <<< "${dockerOutput}"
 grep -Fq '管理端内网访问入口: http://10.20.30.40:8090/4Azs8kbhPL5e' <<< "${dockerOutput}"
-grep -Fq 'MySQL 数据库信息（敏感信息，仅限服务器管理员查看）' <<< "${dockerOutput}"
-grep -Fq '业务账号密码   : docker-db12' <<< "${dockerOutput}"
-grep -Fq 'root账号密码   : docker-root12' <<< "${dockerOutput}"
+grep -Fq 'MySQL 数据库信息（敏感信息，仅限服务器管理员查看）' <<< "${dockerDetails}"
+grep -Fq '业务账号密码   : docker-db12' <<< "${dockerDetails}"
+grep -Fq 'root账号密码   : docker-root12' <<< "${dockerDetails}"
 grep -Fq 'COMPOSE_PROFILES=mysql,redis,https' <<< "${dockerOutput}"
 grep -Fq '初始账号: admin' <<< "${dockerOutput}"
-grep -Fq '初始密码: admin123' <<< "${dockerOutput}"
-grep -Fq 'sql/aid-init.sql 的数据库初始化默认值' <<< "${dockerOutput}"
+grep -Fq '以后台当前设置为准' <<< "${dockerOutput}"
+if grep -Eq 'admin123|docker-(db|root)12' <<< "${dockerOutput}"; then
+  echo 'FAIL: initial access output exposed a credential' >&2
+  exit 1
+fi
 if grep -Fq 'http://服务器IP' <<< "${dockerOutput}" || grep -Fq 'http://localhost:8090' <<< "${dockerOutput}"; then
   echo 'FAIL: legacy placeholder/local access links are still printed' >&2
   exit 1
 fi
 
 MOCK_MODE=manual
-manualOutput="$(print_access_info)"
+manualOutput="$(print_access_info strict)"
 grep -Fq '用户端外网访问入口: http://8.8.4.4:80/' <<< "${manualOutput}"
 grep -Fq '部署类型       : 本机 MySQL 5.7' <<< "${manualOutput}"
 grep -Fq '业务账号密码   : manual-db12' <<< "${manualOutput}"

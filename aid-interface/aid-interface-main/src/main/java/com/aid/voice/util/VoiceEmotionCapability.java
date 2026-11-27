@@ -18,7 +18,7 @@ import lombok.extern.slf4j.Slf4j;
  * <p>职责边界：</p>
  * <ul>
  *   <li>能力来源：模型 {@code aid_ai_model.capability_json.emotions}（供应商官方文档声明的原生编码，
- *       如 MiniMax 的 happy/fearful/whisper、豆包的 happy/fear/coldness），由本工具统一解析；</li>
+ *       如 happy、fear、coldness），由本工具统一解析；</li>
  *   <li>展示翻译：{@link #labelOf(String)} 仅做「供应商编码 → 中文显示名」的纯展示映射
  *       （静态词表，不承担任何"是否支持"判断）；未收录的编码原样返回，不阻断；</li>
  *   <li>下发口径：情感编码原样透传给 Provider（值本身就是供应商原生编码，无需二次映射）。</li>
@@ -42,7 +42,7 @@ public final class VoiceEmotionCapability
     private static final String CAPABILITY_KEY_EMOTIONS = "emotions";
 
     /**
-     * 供应商情感编码 → 中文显示名（纯展示层翻译，覆盖豆包 + MiniMax 官方文档全部编码）。
+     * 供应商情感编码 → 中文显示名（纯展示层翻译，覆盖已配置的常用情感编码）。
      * 未收录的编码 {@link #labelOf(String)} 原样返回，新供应商接入无需改这里也能工作。
      */
     private static final Map<String, String> EMOTION_LABELS = buildLabels();
@@ -50,7 +50,7 @@ public final class VoiceEmotionCapability
     private static Map<String, String> buildLabels()
     {
         Map<String, String> m = new LinkedHashMap<>();
-        // 通用 / MiniMax（speech-2.x 系列固定枚举）
+        // 通用情感
         m.put("happy", "开心");
         m.put("sad", "悲伤");
         m.put("angry", "愤怒");

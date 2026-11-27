@@ -14,6 +14,7 @@ interface Props {
   quote?: BillingQuoteVO | null
   loading?: boolean
   error?: string
+  showQuoteError?: boolean
   idleText?: string
 }
 
@@ -25,6 +26,7 @@ export function SubmitAreaBilling({
   quote,
   loading = false,
   error = '',
+  showQuoteError = false,
   idleText = ''
 }: Props) {
   const view = resolveSubmitAreaBillingView({
@@ -38,6 +40,10 @@ export function SubmitAreaBilling({
       billingQuoteCreditsForDisplay(quote) != null,
     quoteError: error
   })
+
+  if (showQuoteError && error && !loading) {
+    return <div className="billing-quote-hint is-unavailable" role="status">{error}</div>
+  }
 
   if (view === 'rule-preview' && billing) {
     return (

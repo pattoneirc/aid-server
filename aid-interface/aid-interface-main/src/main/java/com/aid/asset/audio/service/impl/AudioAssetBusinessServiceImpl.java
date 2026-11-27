@@ -238,7 +238,7 @@ public class AudioAssetBusinessServiceImpl implements IAudioAssetBusinessService
                     AidAudioAsset::getUserId, AidAudioAsset::getProjectId,
                     AidAudioAsset::getEpisodeId, AidAudioAsset::getStoryboardId,
                     AidAudioAsset::getAudioRecordId, AidAudioAsset::getMediaTaskId,
-                    AidAudioAsset::getAudioUrl,
+                    AidAudioAsset::getAudioUrl, AidAudioAsset::getDurationMs, AidAudioAsset::getAvatarUrl,
                     AidAudioAsset::getFileSize, AidAudioAsset::getAudioFormat,
                     AidAudioAsset::getSampleRate,
                     AidAudioAsset::getTtsText, AidAudioAsset::getVoiceLibraryId,
@@ -282,6 +282,9 @@ public class AudioAssetBusinessServiceImpl implements IAudioAssetBusinessService
         if (Objects.nonNull(req.getAudioSource())) {
             wrapper.eq(AidAudioAsset::getAudioSource, req.getAudioSource());
         }
+        if (Boolean.TRUE.equals(req.getPersonalVoiceOnly())) {
+            PersonalVoiceAssetService.filterPersonalVoices(wrapper);
+        }
         wrapper.orderByDesc(AidAudioAsset::getId);
         return wrapper;
     }
@@ -299,6 +302,8 @@ public class AudioAssetBusinessServiceImpl implements IAudioAssetBusinessService
         vo.setAudioRecordId(entity.getAudioRecordId());
         vo.setMediaTaskId(entity.getMediaTaskId());
         vo.setAudioUrl(entity.getAudioUrl());
+        vo.setDurationMs(entity.getDurationMs());
+        vo.setAvatarUrl(entity.getAvatarUrl());
         vo.setFileSize(entity.getFileSize());
         vo.setAudioFormat(entity.getAudioFormat());
         vo.setSampleRate(entity.getSampleRate());

@@ -275,3 +275,66 @@ html.app-shell-create
   opacity: 0;
   pointer-events: none;
 }
+
+.voice-timbre-picker-wrap .voice-picker-role-hint {
+  margin: 0 0 12px;
+  color: var(--ui-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.voice-timbre-picker-modal .voice-picker-source-tabs {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  gap: 2px;
+  max-width: 100%;
+  margin-bottom: 14px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--v10-s2, var(--ui-raised));
+}
+
+.voice-timbre-picker-modal .voice-picker-source-tabs .home-seg__thumb {
+  position: absolute;
+  inset: 3px auto 3px 0;
+  z-index: 0;
+  border-radius: 7px;
+  background: var(--v10-primary, var(--ui-text));
+  pointer-events: none;
+  transition: transform 160ms ease-out, width 160ms ease-out;
+}
+
+.voice-timbre-picker-modal .voice-picker-source-tabs > button {
+  position: relative;
+  z-index: 1;
+  min-height: 34px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.voice-timbre-picker-modal .voice-picker-source-tabs > button > span {
+  --ui-text: var(--v10-subtle, var(--ui-muted));
+  color: var(--ui-text);
+}
+
+.voice-timbre-picker-modal .voice-picker-source-tabs > button[aria-pressed='true'] > span {
+  --ui-text: var(--v10-on-primary, var(--ui-bg));
+  color: var(--ui-text);
+  font-weight: 600;
+}
+
+.voice-timbre-picker-modal .voice-picker-source-tabs > button:focus-visible {
+  outline: 2px solid var(--ui-brand, var(--v10-text));
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-timbre-picker-modal .voice-picker-source-tabs .home-seg__thumb { transition: none; }
+}

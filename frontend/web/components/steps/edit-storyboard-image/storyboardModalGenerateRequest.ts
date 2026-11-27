@@ -14,6 +14,7 @@ export function buildStoryboardModalGenerateRequest(
       .filter((id) => Number.isFinite(id) && id > 0),
     ...(agentCode ? { agentCode } : {}),
     imagePrompt: String(input.imagePrompt || '').trim(),
+    ...(input.imageReferences !== undefined ? { imageReferences: input.imageReferences } : {}),
     modelName: String(input.modelName || '').trim(),
     aspectRatio: String(input.aspectRatio || '').trim() || '16:9',
     ...(size ? { size } : {}),

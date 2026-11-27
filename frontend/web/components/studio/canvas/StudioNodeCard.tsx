@@ -22,6 +22,7 @@ import { StudioAudioNodePreview } from './StudioAudioNodePreview'
 import { StudioNodeLabelDecoration } from './StudioNodeLabels'
 import { useCreationStore } from '@/stores/creation'
 import type { StudioCanvasNode, StudioMediaKind, StudioNodeKind } from '@/types/studio'
+import { useStudioQuoteReferenceMarkers } from '@/stores/studioQuoteReferenceIssues'
 import { studioConnectionCandidateDisabledReason } from '@/utils/studio/studioLibraryLink'
 import { openStudioFlowBoundEntity } from '@/utils/studio/studioFlowEntityEditor'
 import {
@@ -101,6 +102,7 @@ import { useStudioSmartEdit } from '@/stores/studioSmartEdit'
 import { AUDIO_OPERATION_LABELS } from '@/utils/studio/studioAudioEdit'
 import { StudioReadOnlyNodeCard } from './StudioReadOnlyNodeCard'
 function StudioNodeCardComponent({ id, data, selected, isConnectable, positionAbsoluteX, positionAbsoluteY }: NodeProps<StudioCanvasNode>) {
+  const invalidReferences = useStudioQuoteReferenceMarkers(state => state[id]?.count ?? 0)
   const canvasRuntime = useCanvasProjectRuntime()
   const { theme } = useStudioFreeTheme()
   const serverReadOnly = Boolean(canvasRuntime && !canvasRuntime.canEdit)
@@ -998,6 +1000,8 @@ function StudioNodeCardComponent({ id, data, selected, isConnectable, positionAb
       >
         <span><PlusOutlined /></span>
       </Handle> : null}
+      {invalidReferences > 0 && <span className="studio-node-reference-error" role="img"
+        aria-label={`${invalidReferences} 张连线参考图需要调整`}>!</span>}
     </div>
   )
   return referencePicker ? (

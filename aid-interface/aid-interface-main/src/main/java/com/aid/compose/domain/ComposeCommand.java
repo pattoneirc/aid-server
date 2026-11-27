@@ -26,6 +26,9 @@ public class ComposeCommand {
     /** 输出分辨率档（SD/HD/FHD/2K/4K），默认 FHD(1080P) */
     private String resolution;
 
+    /** 成片目标画幅，为空时沿用源素材尺寸策略。 */
+    private String aspectRatio;
+
     /** 原视频声音是否保留；null 沿用原行为，false 只使用显式配音/BGM。 */
     private Boolean sourceAudioEnabled;
 

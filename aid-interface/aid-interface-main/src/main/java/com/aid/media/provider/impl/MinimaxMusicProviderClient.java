@@ -71,8 +71,7 @@ public class MinimaxMusicProviderClient implements AudioProviderClient {
         }
         final String url;
         try {
-            // The legacy MiniMax provider still hosts existing TTS settings. Only this Music
-            // adapter moves its unchanged official-default host; custom gateways remain intact.
+            // Use the current official Music host for legacy official configurations.
             String baseUrl = "https://api.minimaxi.com".equalsIgnoreCase(StrUtil.trim(config.getBaseUrl()))
                     ? "https://api.minimax.cn" : config.getBaseUrl();
             url = ProviderEndpointUtils.buildSubmitUrl(baseUrl, config.getApiSuffix());

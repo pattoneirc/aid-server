@@ -49,9 +49,6 @@ public class TokenDanceCatalogServiceImpl implements ITokenDanceCatalogService {
             Map.entry("wan3:video-synthesis", "/gateway/alibaba/wan3/v1/video-synthesis"),
             Map.entry("happyhorse:video-synthesis", "/gateway/alibaba/happyhorse/v1/video-synthesis"),
             Map.entry("minimax:video_generation_v2", "/gateway/minimax/v2/video_generation"),
-            Map.entry("minimax:t2a_v2", "/gateway/minimax/v1/t2a_v2"),
-            Map.entry("minimax:t2a_v2_ws", "/gateway/minimax/v1/t2a_v2_ws"),
-            Map.entry("minimax:voice_clone", "/gateway/minimax/v1/voice_clone"),
             Map.entry("ark:tts", "/gateway/ark/v3/tts/unidirectional"),
             Map.entry("ark:tts_ws", "/gateway/ark/v3/tts/bidirection"));
 

@@ -48,12 +48,15 @@ export function StudioComposerAttachmentStrip({
   upstream,
   refs,
   onInsert,
-  onRemove
+  onRemove,
+  issueForRef
 }: {
   upstream: StudioComposerThumbItem[]
   refs: StudioComposerRef[] | undefined
   onInsert: (ref: StudioComposerRef) => void
   onRemove: (ref: StudioComposerRef) => void
+  issueForRef?: (ref: Pick<StudioComposerRef, 'nodeId' | 'assetId' | 'kind' | 'mediaKind' | 'previewUrl'>) =>
+    { resourceId: string; index: number; invalid: boolean } | undefined
 }) {
   const visibleRefs = useMemo(
     () => (refs ?? []).filter((ref) => isComposerRefStripVisible(ref)),
@@ -78,6 +81,7 @@ export function StudioComposerAttachmentStrip({
       const previewUrl = source?.data.mediaUrl ?? ref.previewUrl
       const displayIndex = index + 1
       if (isMediaPreviewRef(mediaKind, previewUrl)) {
+        const issue = issueForRef?.(ref)
         return [{
           type: 'thumb' as const,
           key: ref.id,
@@ -88,7 +92,8 @@ export function StudioComposerAttachmentStrip({
             title: source?.data.title ?? ref.title,
             mediaKind,
             nodeId: ref.nodeId,
-            index: displayIndex,
+            index: issue?.index ?? displayIndex,
+            invalidResourceId: issue?.invalid ? issue.resourceId : undefined,
             onInsert: () => onInsert(ref),
             onRemove: () => onRemove(ref)
           } satisfies StudioComposerThumbItem
@@ -107,15 +112,17 @@ export function StudioComposerAttachmentStrip({
         }
       }]
     })
-  }, [onInsert, onRemove, visibleRefs, sourceSignature])
+  }, [onInsert, onRemove, visibleRefs, sourceSignature, issueForRef])
 
   if (!upstream.length && !items.length) return null
 
   return (
     <div className="studio-composer-attachment-strip" aria-label="引用附件">
-      {upstream.map((item) => (
-        <StudioComposerThumb key={`up-${item.key}`} item={item} />
-      ))}
+      {upstream.map((item) => {
+        const issue = issueForRef?.({ ...item, kind: 'node', mediaKind: item.mediaKind ?? 'image' })
+        return <StudioComposerThumb key={`up-${item.key}`}
+          item={issue ? { ...item, index: issue.index, invalidResourceId: issue.invalid ? issue.resourceId : undefined } : item} />
+      })}
       {items.map((item) => (
         item.type === 'thumb' ? (
           <StudioComposerThumb key={item.key} item={item.thumb} showRemove />

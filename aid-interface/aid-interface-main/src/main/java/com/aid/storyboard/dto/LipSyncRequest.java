@@ -6,7 +6,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 /**
- * 发起对口型合成请求DTO（台词现场 TTS 配音 + 分镜视频提交对口型模型）。
+ * 发起分镜对口型：使用已登记的上传录音，或先将分镜台词合成为音频。
  *
  * @author 视觉AID
  */
@@ -16,6 +16,10 @@ public class LipSyncRequest {
     /** 分镜ID */
     @NotNull(message = "分镜ID不能为空")
     private Long storyboardId;
+
+    /** 已登记的本地录音 ID；存在时直接用原声驱动对口型。 */
+    @Min(value = 1, message = "录音ID无效")
+    private Long referenceAudioId;
 
     /** 兜底音色库ID（可选）：分镜台词解析不出「角色→绑定音色」时（纯旁白/角色未绑定）用此音色 TTS */
     private Long voiceLibraryId;

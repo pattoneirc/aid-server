@@ -129,7 +129,7 @@ export function buildPromptAssetsFromResolve(
     referenceImageIds?: number[]
     referenceImageUrls?: string[]
     unresolvedNames?: string[]
-    references?: Array<{ n?: number | null; name?: string | null; imageId?: number | null; url?: string | null }> | null
+    references?: Array<{ n?: number | null; name?: string | null; imageId?: number | string | null; url?: string | null }> | null
   }
 ): PromptAssetItem[] {
   const refs = Array.isArray(data.references) ? data.references : []
@@ -138,10 +138,10 @@ export function buildPromptAssetsFromResolve(
       refs.map((ref, i) => {
         const name = normalizePromptAssetPlaceholderName(ref?.name, `参考图${i + 1}`)
         const imageIndex = Number(ref?.n) > 0 ? Number(ref.n) : i + 1
-        const imageId = Number(ref?.imageId)
+        const imageId = String(ref?.imageId ?? '')
         return {
-          assetId: Number.isFinite(imageId) && imageId > 0
-            ? String(imageId)
+          assetId: isLibraryPromptAssetId(imageId)
+            ? imageId
             : `resolved-${imageIndex}-${name}`,
           assetType: 'other' as PromptAssetType,
           name,
@@ -300,7 +300,7 @@ export function collectStoryboardPromptAssets(
 
   const pushList = (images: any[], assetType: PromptAssetType) => {
     images.forEach((img, i) => {
-      const name = assetDisplayName(img, assetType, i)
+      const name = normalizePromptAssetPlaceholderName(img?.promptReferenceName) || assetDisplayName(img, assetType, i)
       list.push({
         assetId: String(img?.id ?? `${assetType}-${i}-${name}`),
         assetType,

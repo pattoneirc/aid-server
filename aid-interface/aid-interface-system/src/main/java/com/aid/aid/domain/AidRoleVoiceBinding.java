@@ -47,6 +47,9 @@ public class AidRoleVoiceBinding extends BaseEntity implements Serializable
     @Excel(name = "音色ID")
     private Long voiceLibraryId;
 
+    /** 角色选用的个人原录音（aid_audio_asset.id）。 */
+    private Long personalAudioAssetId;
+
     /** 冗余：音色厂商编码（调用 TTS 时原样透传） */
     @Excel(name = "音色编码")
     private String voiceCode;

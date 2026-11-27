@@ -6,11 +6,13 @@ import { canvasQuoteIdentity, canvasQuoteRequestKey, requestCanvasQuote } from '
 import { useCanvasGatewayIdentity } from './useCanvasGatewayIdentity'
 import { apiErrorMessage } from '@/utils/apiError'
 import { canvasQuoteErrorData } from '@/utils/canvas/canvasQuoteMetadataRecovery'
+import { videoQuoteReferenceIssues, type VideoQuoteReferenceIssue } from '@/utils/canvas/canvasVideoQuoteReferenceIssues'
 import { canRetryCanvasQuote, CANVAS_QUOTE_ACTIVATION_COOLDOWN, CANVAS_QUOTE_RETRY_DELAYS } from '@/utils/canvas/canvasQuoteRecovery'
 
 export type CanvasQuoteStatus = 'IDLE' | 'CONNECTING' | 'BLOCKED' | 'LOADING' | 'READY' | 'ERROR'
 export type CanvasQuoteState = {
   quote: BillingQuoteVO | null; loading: boolean; error: string; status: CanvasQuoteStatus; refresh: () => void
+  referenceIssues?: VideoQuoteReferenceIssue[]
 }
 
 function quoteError(reason: unknown): string {
@@ -36,7 +38,7 @@ export function useCanvasQuote<T>(scope: string, request: T | null,
   useEffect(() => { loader.current = load }, [load])
   const [revision, setRevision] = useState(0)
   const key = JSON.stringify([identity, scope, requestKey, revision, blockedReason])
-  const [state, setState] = useState<{ key: string; quote: BillingQuoteVO | null; error: string; loading: boolean }>({ key: '', quote: null, error: '', loading: false })
+  const [state, setState] = useState<{ key: string; quote: BillingQuoteVO | null; error: string; loading: boolean; referenceIssues?: VideoQuoteReferenceIssue[] }>({ key: '', quote: null, error: '', loading: false })
   const refresh = useCallback(() => {
     if (connected && stableRequest && !blockedReason) setRevision(value => value + 1)
   }, [connected, stableRequest, blockedReason])
@@ -70,7 +72,7 @@ export function useCanvasQuote<T>(scope: string, request: T | null,
         }).catch(reason => {
           if (!active || canvasQuoteIdentity() !== identity) return
           failed = true
-          setState({ key, quote: null, error: quoteError(reason), loading: false })
+          setState({ key, quote: null, error: quoteError(reason), loading: false, referenceIssues: videoQuoteReferenceIssues(reason) })
           const delay = CANVAS_QUOTE_RETRY_DELAYS[attempts]
           if (canRetryCanvasQuote(reason) && delay !== undefined) {
             attempts += 1
@@ -107,5 +109,5 @@ export function useCanvasQuote<T>(scope: string, request: T | null,
   if (blockedReason) return { quote: null, loading: false, error: blockedReason, status: 'BLOCKED', refresh }
   if (state.key !== key) return { quote: null, loading: true, error: '', status: 'LOADING', refresh }
   if (state.loading) return { quote: null, loading: true, error: '', status: 'LOADING', refresh }
-  return { quote: state.quote, loading: false, error: state.error, status: state.quote ? 'READY' : 'ERROR', refresh }
+  return { quote: state.quote, loading: false, error: state.error, status: state.quote ? 'READY' : 'ERROR', refresh, referenceIssues: state.referenceIssues }
 }

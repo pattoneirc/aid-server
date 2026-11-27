@@ -52,9 +52,6 @@ const PROTOCOL_LABELS: Record<string, string> = {
   'wan3:video-synthesis': '通义 Wan3 视频',
   'happyhorse:video-synthesis': '通义舞动视频',
   'minimax:video_generation_v2': 'MiniMax 视频 V2',
-  'minimax:t2a_v2': 'MiniMax 配音',
-  'minimax:t2a_v2_ws': 'MiniMax 流式配音',
-  'minimax:voice_clone': 'MiniMax 音色复刻',
   'ark:tts': '方舟配音',
   'ark:tts_ws': '方舟流式配音'
 };

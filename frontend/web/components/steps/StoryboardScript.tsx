@@ -737,8 +737,9 @@ export function StoryboardScript({
           open={showStoryboardScriptModal}
           panelTitle={currentScriptPanelTitle}
           initialContent={currentScriptPanelContent}
+          storyboardId={isProMode ? undefined : parseServerStoryboardId(panels[currentScriptPanelIndex]?.id) ?? undefined}
           onOpenChange={setShowStoryboardScriptModal}
-          onSave={(payload) => void ops.handleSaveStoryboardScript(payload)}
+          onSave={ops.handleSaveStoryboardScript}
         />
       ) : null}
       {/* 自动生成分镜弹窗：确定后开始生成 */}

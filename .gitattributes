@@ -14,6 +14,7 @@ model-catalog/tokendance/*.json -text
 "/doc/提示词开发指南.md" -export-ignore
 "/doc/公开Provider接入指南.md" -export-ignore
 /doc/public-provider-integration.md -export-ignore
+/sql/maintenance export-ignore
 
 # 二进制文件不做任何转换
 *.jar binary

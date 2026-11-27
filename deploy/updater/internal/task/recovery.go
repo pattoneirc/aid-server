@@ -11,15 +11,17 @@ import (
 )
 
 type recoveryRecord struct {
-	Task          Task             `json:"task"`
-	Snapshot      *backup.Snapshot `json:"snapshot"`
-	DatabaseDirty bool             `json:"databaseDirty"`
-	Completed     bool             `json:"completed"`
+	Task            Task             `json:"task"`
+	Snapshot        *backup.Snapshot `json:"snapshot"`
+	DatabaseDirty   bool             `json:"databaseDirty"`
+	Completed       bool             `json:"completed"`
+	CreatedSnapshot bool             `json:"createdSnapshot,omitempty"`
+	Preparing       bool             `json:"preparing,omitempty"`
 }
 
-func (r *Runner) createRecovery(t *Task, snapshot *backup.Snapshot) (string, error) {
+func (r *Runner) createRecovery(t *Task, snapshot *backup.Snapshot, created bool) (string, error) {
 	path := filepath.Join(r.cfg.WorkDir, "recovery-"+t.TaskID+".json")
-	record := &recoveryRecord{Task: *t, Snapshot: snapshot}
+	record := &recoveryRecord{Task: *t, Snapshot: snapshot, CreatedSnapshot: created, Preparing: snapshot == nil}
 	if err := writeJSONAtomic(path, record); err != nil {
 		return "", fmt.Errorf("写入恢复记录失败: %w", err)
 	}
@@ -88,6 +90,12 @@ func (r *Runner) loadRecovery(path string) (*recoveryRecord, error) {
 	record := &recoveryRecord{}
 	if err := json.Unmarshal(raw, record); err != nil {
 		return nil, err
+	}
+	if !taskIDPattern.MatchString(record.Task.TaskID) || filepath.Base(path) != "recovery-"+record.Task.TaskID+".json" {
+		return nil, fmt.Errorf("恢复记录任务编号无效")
+	}
+	if record.Preparing {
+		return record, nil
 	}
 	if record.Snapshot == nil || strings.TrimSpace(record.Snapshot.Dir) == "" {
 		return nil, fmt.Errorf("恢复记录缺少快照")

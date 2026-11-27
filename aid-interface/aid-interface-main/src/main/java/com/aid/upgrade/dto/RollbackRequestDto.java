@@ -12,4 +12,7 @@ public class RollbackRequestDto {
 
     /** 目标版本号，必须来自更新清单的可回退版本列表 */
     private String targetVersion;
+
+    /** 本机版本备份编号。 */
+    private String backupId;
 }

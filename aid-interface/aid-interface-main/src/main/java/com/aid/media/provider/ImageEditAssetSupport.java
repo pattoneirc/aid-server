@@ -134,6 +134,13 @@ public final class ImageEditAssetSupport {
         return readAuthorizedOrLegacy(request.getAuthorizedMaskImage(), request.getMaskImageUrl(), "蒙版");
     }
 
+    /** Read an already-authorized project locator using the active storage provider. */
+    public static BinaryImage readStoredReference(String locator) {
+        var content = MediaBytesFetcher.fetchAuthorized(locator, MAX_INPUT_BYTES, REQUIRED_IMAGE_TIMEOUT_MS);
+        if (content.isEmpty() || content.truncated()) throw assetReadFailure("参考图", content);
+        return decodeBinary(content.bytes(), "参考图");
+    }
+
     private static BinaryImage readAuthorizedOrLegacy(AuthorizedImageAssetSnapshot snapshot,
                                                         String source, String label) {
         if (snapshot == null) return read(source, label);

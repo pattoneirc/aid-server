@@ -315,13 +315,13 @@ SOURCE_GIT_IMAGE="${AID_GIT_IMAGE:-alpine/git:2.47.2}"
 SOURCE_MAVEN_IMAGE="${AID_MAVEN_IMAGE:-maven:3.9.9-eclipse-temurin-17}"
 SOURCE_NODE_IMAGE="${AID_NODE_IMAGE:-node:22.22.0-bookworm-slim}"
 SOURCE_GO_IMAGE="${AID_GO_IMAGE:-golang:1.22.12-bookworm}"
-# Docker Hub 国内代理采用可配置候选列表。默认值均为公开 Registry 代理；云厂商
-# 专属加速地址可通过正式配置 DOCKER_MIRRORS 或 AID_DOCKER_MIRRORS 覆盖。
-DEFAULT_DOCKER_MIRRORS="docker.m.daocloud.io,dockerproxy.net"
+# 内置国内候选均使用公网地址。可通过 DOCKER_MIRRORS 或 AID_DOCKER_MIRRORS 覆盖。
+DEFAULT_DOCKER_MIRRORS="docker.m.daocloud.io,docker.1panel.live,docker.1ms.run"
 DOCKER_MIRROR_ORDER=""
 DOCKER_MIRRORS_RESOLVED=0
 IMAGE_PULL_TIMEOUT_SECONDS="${AID_IMAGE_PULL_TIMEOUT_SECONDS:-900}"
-IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS="${AID_IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS:-45}"
+MIRROR_IMAGE_PULL_TIMEOUT_SECONDS="${AID_DOCKER_MIRROR_PULL_TIMEOUT_SECONDS:-${AID_IMAGE_PULL_TIMEOUT_SECONDS:-120}}"
+IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS="${AID_IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS:-12}"
 DOCKER_MIN_VERSION="24.0.0"
 DOCKER_COMPOSE_MIN_VERSION="2.20.0"
 GIT_MIN_VERSION="1.8.3"
@@ -344,6 +344,8 @@ MAVEN_HOME=""
 GO_VERSION="1.22.12"
 GO_HOME=""
 FFMPEG_RUNTIME_VERSION="8.1.2"
+RUNTIME_BUNDLE_RELEASE_VERSION="3.0.1"
+RUNTIME_BUNDLE_SHA256="9aa35b1dc70f1c9942e7efbc9cafd0529a4bbd931049899c1f21cabf3973fe51"
 FFMPEG_MIN_VERSION="5.1"
 FFMPEG_RUNTIME_ATOMGIT_TAG="v3.0.0"
 FFMPEG_RUNTIME_MIRROR_TAG="v1.0.0-beta.6"
@@ -428,17 +430,24 @@ state_set() { # state_set <key> <value>
     echo "${1}=${2}" >> "${STATE_FILE}"
   fi
 }
+require_control_terminal() {
+  ( : </dev/tty ) 2>/dev/null \
+    || die "缺少控制终端。请使用交互式 SSH，或按部署文档设置非交互参数后重新执行。"
+}
+
 ask() { # ask <提示> <默认值>
   local answer
-  read -r -p "$1 [$2]: " answer </dev/tty
+  require_control_terminal
+  IFS= read -r -p "$1 [$2]: " answer </dev/tty || return 1
   echo "${answer:-$2}"
 }
 ask_yes_no() { # ask_yes_no <提示> <默认值:y|n>
   local prompt="$1" defaultAnswer="$2" answer
   [[ "${defaultAnswer}" == "y" || "${defaultAnswer}" == "n" ]] \
     || die "y/n默认值只支持y或n"
+  require_control_terminal
   while :; do
-    read -r -p "${prompt} (y/n) [${defaultAnswer}]: " answer </dev/tty
+    IFS= read -r -p "${prompt} (y/n) [${defaultAnswer}]: " answer </dev/tty || return 1
     answer="${answer:-${defaultAnswer}}"
     case "${answer,,}" in
       y) echo "y"; return 0 ;;
@@ -449,7 +458,8 @@ ask_yes_no() { # ask_yes_no <提示> <默认值:y|n>
 }
 ask_secret() { # ask_secret <提示>
   local answer
-  read -r -s -p "$1: " answer </dev/tty
+  require_control_terminal
+  IFS= read -r -s -p "$1: " answer </dev/tty || return 1
   echo "" >/dev/tty
   echo "${answer}"
 }
@@ -855,6 +865,8 @@ docker_repo_candidates() { # docker_repo_candidates <ubuntu|debian|centos> <相�
 
 configure_new_docker_registry_mirrors() {
   local daemonFile="/etc/docker/daemon.json" backup="" mirror json="" first=yes
+  resolve_dependency_region
+  [[ "${RESOLVED_DEPENDENCY_REGION}" == cn ]] || return 0
   resolve_docker_mirror_order
   [[ -n "${DOCKER_MIRROR_ORDER}" ]] || return 0
   for mirror in ${DOCKER_MIRROR_ORDER}; do
@@ -1106,19 +1118,18 @@ normalize_docker_mirror() { # normalize_docker_mirror <Registry前缀>
 
 probe_docker_mirror() { # probe_docker_mirror <Registry前缀>；成功输出毫秒
   local mirror="$1" registry result code seconds
-  command -v curl >/dev/null 2>&1 || return 1
+  command -v curl >/dev/null 2>&1 || return 2
   registry="${mirror%%/*}"
   result="$(curl --silent --show-error --output /dev/null \
     --connect-timeout 3 --max-time 6 --write-out '%{http_code} %{time_total}' \
-    "https://${registry}/v2/" 2>/dev/null || true)"
+    "https://${registry}/v2/" 2>/dev/null)" || return 2
   code="${result%% *}"
   seconds="${result#* }"
   [[ "${code}" == "200" || "${code}" == "401" ]] || return 1
   awk -v value="${seconds}" 'BEGIN { printf "%d\n", value * 1000 }'
 }
 
-# 复用成熟安装器的做法：候选源先做短连接测速，可达源按延迟排序；探测失败的
-# 候选仍保留在末尾参与真实 pull，避免 Registry 根接口临时异常造成误判。
+# 可达的候选按延迟排序。根接口有 HTTP 响应但不接受根路径的自定义源仍可检查镜像清单。
 resolve_docker_mirror_order() {
   (( DOCKER_MIRRORS_RESOLVED == 0 )) || return 0
   local raw candidate mirror latency ranked="" deferred="" sorted="" seen=" "
@@ -1136,8 +1147,10 @@ resolve_docker_mirror_order() {
     if latency="$(probe_docker_mirror "${mirror}" 2>/dev/null)"; then
       log "Docker镜像测速: ${mirror} ${latency}ms"
       ranked+="${latency} ${mirror}"$'\n'
+    elif [[ "$?" == 2 ]]; then
+      warn "Docker镜像源连接失败，本次跳过: ${mirror}"
     else
-      warn "Docker镜像测速不可达，保留为末位重试: ${mirror}"
+      warn "Docker镜像源根接口未通过检查，留待镜像清单验证: ${mirror}"
       deferred+="${mirror} "
     fi
   done < <(printf '%s\n' "${raw}" | tr ',' '\n')
@@ -1148,10 +1161,30 @@ resolve_docker_mirror_order() {
   DOCKER_MIRROR_ORDER="${DOCKER_MIRROR_ORDER% }"
   DOCKER_MIRRORS_RESOLVED=1
   if [[ -n "${DOCKER_MIRROR_ORDER}" ]]; then
-    log "Docker国内镜像尝试顺序: ${DOCKER_MIRROR_ORDER// / -> }"
+    log "Docker 国内镜像候选: ${DOCKER_MIRROR_ORDER}"
   else
     warn "未配置有效 Docker 国内镜像，将只尝试 Docker Hub 官方地址"
   fi
+}
+
+docker_mirror_order_for_image() { # docker_mirror_order_for_image <标准镜像>
+  local preferred="" mirror
+  if [[ "$(docker_mirror_setting)" == "${DEFAULT_DOCKER_MIRRORS}" ]]; then
+    # 默认固定版本按国内实测的完整下载耗时排序。
+    case "$1" in
+      alpine/git:2.47.2|maven:3.9.9-eclipse-temurin-17|node:22.22.0-bookworm-slim|golang:1.22.12-bookworm)
+        preferred="docker.1panel.live" ;;
+      mysql:5.7) preferred="docker.m.daocloud.io" ;;
+      nginx:1.25-alpine|debian:bookworm-slim|docker:27-cli) preferred="docker.m.daocloud.io docker.1panel.live" ;;
+      redis:7-alpine) preferred="docker.1ms.run docker.1panel.live" ;;
+    esac
+  fi
+  for mirror in ${preferred}; do
+    if [[ " ${DOCKER_MIRROR_ORDER} " == *" ${mirror} "* ]]; then printf '%s\n' "${mirror}"; fi
+  done
+  for mirror in ${DOCKER_MIRROR_ORDER}; do
+    if [[ " ${preferred} " != *" ${mirror} "* ]]; then printf '%s\n' "${mirror}"; fi
+  done
 }
 
 dockerhub_mirror_image() { # dockerhub_mirror_image <Registry前缀> <标准镜像>
@@ -1195,55 +1228,83 @@ local_image_matches_digest() { # local_image_matches_digest <镜像> <摘要>
 
 pull_docker_image() {
   if command -v timeout >/dev/null 2>&1; then
-    timeout "${IMAGE_PULL_TIMEOUT_SECONDS}" docker pull "$1"
+    timeout -k 5s "${2:-${IMAGE_PULL_TIMEOUT_SECONDS}}" docker pull "$1"
   else
     docker pull "$1"
   fi
 }
 
 probe_docker_image_manifest() { # probe_docker_image_manifest <完整镜像引用>
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "${IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS}" docker manifest inspect "$1" >/dev/null 2>&1
+  if docker buildx version >/dev/null 2>&1; then
+    set -- docker buildx imagetools inspect --raw "$1"
   else
-    docker manifest inspect "$1" >/dev/null 2>&1
+    set -- docker manifest inspect "$1"
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 2s "${IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS}" "$@" >/dev/null 2>&1
+  else
+    "$@" >/dev/null 2>&1
   fi
 }
 
+pull_docker_mirror() { # pull_docker_mirror <镜像引用> <标准镜像> <用途> <官方摘要>
+  local mirrorRef="$1" image="$2" label="$3" digest="$4"
+  local pullTimeout="${MIRROR_IMAGE_PULL_TIMEOUT_SECONDS}"
+  if [[ "${mirrorRef}" == docker.1panel.live/* && -z "${AID_DOCKER_MIRROR_PULL_TIMEOUT_SECONDS:-${AID_IMAGE_PULL_TIMEOUT_SECONDS:-}}" ]]; then
+    # 大镜像留出与 1Panel 公网完整下载和导入相匹配的时间。
+    case "${image}" in
+      maven:3.9.9-eclipse-temurin-17|node:22.22.0-bookworm-slim|golang:1.22.12-bookworm) pullTimeout=180 ;;
+    esac
+  fi
+  log "通过国内镜像下载${label}: ${mirrorRef}"
+  if ! pull_docker_image "${mirrorRef}" "${pullTimeout}"; then
+    warn "${label}镜像下载失败，继续下一个来源: ${mirrorRef}"
+    return 1
+  fi
+  if [[ -n "${digest}" ]] && ! local_image_matches_digest "${mirrorRef}" "${digest}"; then
+    warn "${label}镜像摘要与官方发布清单不一致，已拒绝来源: ${mirrorRef}"
+    docker image rm "${mirrorRef}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  docker tag "${mirrorRef}" "${image}" || die "${label}镜像名称映射失败: ${image}"
+  ok "${label}镜像下载成功: ${mirrorRef}"
+}
+
 try_docker_mirrors() { # try_docker_mirrors <镜像> <用途> <官方摘要>
-  local image="$1" label="$2" digest="$3" mirror mirrorRef candidateOrder
-  local readyMirrors="" deferredMirrors=""
+  local image="$1" label="$2" digest="$3" mirror mirrorRef probe otherProbe deferredRefs=""
+  local -a probes=()
   resolve_docker_mirror_order
-  # Registry 根接口的延迟只能反映入口连通性。真实镜像可能在后端对象存储或某个
-  # 仓库路径上失败，因此再对当前镜像做 manifest 预检；通过者优先，失败者仍
-  # 保留在末尾参与真实 pull，避免第三方代理协议差异造成误判。
-  for mirror in ${DOCKER_MIRROR_ORDER}; do
+  # 先探测当前镜像的候选来源，再按优先级拉取；其他镜像独立选源。
+  for mirror in $(docker_mirror_order_for_image "${image}"); do
     mirrorRef="$(dockerhub_mirror_image "${mirror}" "${image}" 2>/dev/null || true)"
     [[ -n "${mirrorRef}" ]] || continue
-    if probe_docker_image_manifest "${mirrorRef}"; then
-      log "Docker镜像清单可用: ${mirrorRef}"
-      readyMirrors+="${mirror} "
-    else
-      warn "Docker镜像清单预检失败，保留为末位重试: ${mirrorRef}"
-      deferredMirrors+="${mirror} "
-    fi
+    [[ -z "${digest}" ]] || mirrorRef="$(image_with_digest "${mirrorRef}" "${digest}")"
+    probe_docker_image_manifest "${mirrorRef}" >/dev/null 2>&1 &
+    probes+=("$! ${mirrorRef}")
   done
-  candidateOrder="${readyMirrors}${deferredMirrors}"
-  candidateOrder="${candidateOrder% }"
-  for mirror in ${candidateOrder}; do
-    mirrorRef="$(dockerhub_mirror_image "${mirror}" "${image}" 2>/dev/null || true)"
-    [[ -n "${mirrorRef}" ]] || continue
-    log "通过国内镜像下载${label}: ${mirrorRef}"
-    if pull_docker_image "${mirrorRef}"; then
-      if [[ -z "${digest}" ]] || local_image_matches_digest "${mirrorRef}" "${digest}"; then
-        docker tag "${mirrorRef}" "${image}" || die "${label}镜像名称映射失败: ${image}"
-        ok "${label}镜像下载成功: ${mirror}"
+  for probe in "${probes[@]}"; do
+    mirrorRef="${probe#* }"
+    if wait "${probe%% *}"; then
+      log "Docker镜像清单可用: ${mirrorRef}"
+      if pull_docker_mirror "${mirrorRef}" "${image}" "${label}" "${digest}"; then
+        for otherProbe in "${probes[@]}"; do
+          [[ "${otherProbe}" == "${probe}" ]] && continue
+          if jobs -pr | grep -Fxq "${otherProbe%% *}"; then
+            kill "${otherProbe%% *}" 2>/dev/null || true
+          fi
+          wait "${otherProbe%% *}" 2>/dev/null || true
+        done
         return 0
       fi
-      warn "${label}镜像摘要与官方发布清单不一致，已拒绝来源: ${mirror}"
-      docker image rm "${mirrorRef}" >/dev/null 2>&1 || true
+    elif [[ -z "${digest}" ]]; then
+      warn "Docker镜像清单预检失败，保留为末位重试: ${mirrorRef}"
+      deferredRefs+="${mirrorRef} "
     else
-      warn "${label}镜像下载失败，继续下一个来源: ${mirror}"
+      warn "Docker镜像固定摘要预检失败，跳过该来源: ${mirrorRef}"
     fi
+  done
+  for mirrorRef in ${deferredRefs}; do
+    if pull_docker_mirror "${mirrorRef}" "${image}" "${label}" "${digest}"; then return 0; fi
   done
   return 1
 }
@@ -1260,14 +1321,16 @@ ensure_docker_image() { # ensure_docker_image <镜像> <用途>
     warn "${label}本地镜像摘要不符合当前发布清单，将重新拉取已固定版本: ${image}"
   fi
   resolve_dependency_region
-  resolve_docker_mirror_order
   if [[ -n "${digest}" ]]; then
     officialRef="$(image_with_digest "${image}" "${digest}")"
   else
     officialRef="${image}"
     warn "${label}使用了自定义或未固定镜像，无法与官方发布摘要核对: ${image}"
   fi
-  for mirror in ${DOCKER_MIRROR_ORDER}; do
+  # 已有镜像缓存可以离线复用。国外线路先访问官方源，失败后才探测国内仓库。
+  for mirror in $(docker_mirror_setting | tr -d '[:space:]' | tr ',' ' '); do
+    mirror="$(normalize_docker_mirror "${mirror}" 2>/dev/null || true)"
+    [[ -n "${mirror}" ]] || continue
     mirrorImage="$(dockerhub_mirror_image "${mirror}" "${image}" 2>/dev/null || true)"
     if [[ -n "${mirrorImage}" ]] && docker image inspect "${mirrorImage}" >/dev/null 2>&1 \
         && { [[ -z "${digest}" ]] || local_image_matches_digest "${mirrorImage}" "${digest}"; }; then
@@ -1546,9 +1609,10 @@ ffmpeg_runtime_atomgit_url() { # ffmpeg_runtime_atomgit_url <amd64|arm64>
 
 ffmpeg_runtime_download_urls() { # ffmpeg_runtime_download_urls <amd64|arm64>
   local arch="$1" name="" url="" seen=$'\n'
-  local custom="" tencent="" aliyun="" github=""
+  local custom="" cdn="" tencent="" aliyun="" github=""
   local -a candidates=()
   name="ffmpeg-${FFMPEG_RUNTIME_VERSION}-${arch}-static.tar.xz"
+  cdn="https://cdn.aidstudio.com.cn/aid/release/ffmpeg/${FFMPEG_RUNTIME_VERSION}/${name}"
   github="https://github.com/shijue-aid/aid-studio/releases/download/${FFMPEG_RUNTIME_MIRROR_TAG}/${name}"
   case "${arch}" in
     amd64)
@@ -1560,12 +1624,51 @@ ffmpeg_runtime_download_urls() { # ffmpeg_runtime_download_urls <amd64|arm64>
       tencent="${AID_FFMPEG_TENCENT_URL_ARM64:-}"
       aliyun="${AID_FFMPEG_ALIYUN_URL_ARM64:-}" ;;
   esac
-  candidates=("${custom}" "$(ffmpeg_runtime_atomgit_url "${arch}")" "${tencent}" "${aliyun}" "${github}")
+  candidates=("${custom}" "$(ffmpeg_runtime_atomgit_url "${arch}")" "${cdn}" "${tencent}" "${aliyun}" "${github}")
   for url in "${candidates[@]}"; do
     [[ -n "${url}" && "${seen}" != *$'\n'"${url}"$'\n'* ]] || continue
     printf '%s\n' "${url}"
     seen+="${url}"$'\n'
   done
+}
+
+extract_runtime_bundle_member() { # <附件名> <附件SHA256> <临时目标> <download|cached>
+  local name="$1" checksum="$2" target="$3" mode="$4" bundle url work arch primary
+  local bundleName="aid-runtime-bundle_${RUNTIME_BUNDLE_RELEASE_VERSION}.tar"
+  local bundleSHA="${RUNTIME_BUNDLE_SHA256}"
+  [[ -z "${RESOLVED_VERSION:-}" || "${RESOLVED_VERSION}" == "${RUNTIME_BUNDLE_RELEASE_VERSION}" ]] || return 1
+  case "${name}" in
+    "aid-updater_${RUNTIME_BUNDLE_RELEASE_VERSION}_linux_amd64.tar.gz"|"aid-updater_${RUNTIME_BUNDLE_RELEASE_VERSION}_linux_arm64.tar.gz"|\
+    "ffmpeg-${FFMPEG_RUNTIME_VERSION}-amd64-static.tar.xz"|"ffmpeg-${FFMPEG_RUNTIME_VERSION}-arm64-static.tar.xz") ;;
+    *) return 1 ;;
+  esac
+
+  bundle="${AID_RUNTIME_BUNDLE_FILE:-}"
+  if [[ -z "${bundle}" ]]; then
+    arch="$(ffmpeg_runtime_arch)" || return 1
+    primary="AID_FFMPEG_PRIMARY_URL_${arch^^}"
+    [[ -n "${AID_RUNTIME_BUNDLE_URL:-}" || -z "${!primary:-}" ]] || return 1
+    work="${AID_DEPLOYMENT_WORK_DIR:-}"
+    [[ "${work}" == "${DATA_ROOT}/source-build/.aid-deployment-work" && -d "${work}" && ! -L "${work}" ]] || return 1
+    bundle="${work}/${bundleName}"
+    if [[ ! -f "${bundle}" ]]; then
+      [[ "${mode}" == download && ! -e "${bundle}.unavailable" ]] || return 1
+      url="${AID_RUNTIME_BUNDLE_URL:-https://api.atomgit.com/api/v5/repos/shijue-aid/aid-studio/releases/v${RUNTIME_BUNDLE_RELEASE_VERSION}/attach_files/${bundleName}/download}"
+      if ! try_download "${url}" "${bundle}" "AID 运行依赖合包" sha256 "${bundleSHA}"; then
+        : > "${bundle}.unavailable"
+        warn "运行依赖合包暂不可用，继续使用已配置的独立附件"
+        return 1
+      fi
+    fi
+  fi
+  file_digest_matches "${bundle}" sha256 "${bundleSHA}" || return 1
+  if ! tar -xOf "${bundle}" -- "${name}" > "${target}" \
+      || ! file_digest_matches "${target}" sha256 "${checksum}"; then
+    rm -f -- "${target}"
+    warn "合包中的 ${name} 未通过附件校验，切换独立附件"
+    return 1
+  fi
+  ok "已从运行依赖合包提取并校验 ${name}"
 }
 
 install_ffmpeg_runtime_version() ( # isolated subshell guarantees temporary cleanup on every exit
@@ -1582,17 +1685,21 @@ install_ffmpeg_runtime_version() ( # isolated subshell guarantees temporary clea
   trap 'rm -rf -- "${workDir}" "${staged:-}" "${linkTmp:-}"' EXIT INT TERM
   archive="${workDir}/ffmpeg-${FFMPEG_RUNTIME_VERSION}-${arch}-static.tar.xz"
 
-  mapfile -t urls < <(ffmpeg_runtime_download_urls "${arch}")
-  for url in "${urls[@]}"; do
-    [[ -n "${url}" ]] || continue
-    rm -f -- "${archive}" "${archive}.part"
-    if try_download "${url}" "${archive}" "AID FFmpeg ${FFMPEG_RUNTIME_VERSION}（${arch}）" sha256 "${checksum}" \
-        && [[ "$(sha256_file "${archive}" 2>/dev/null || true)" == "${checksum}" ]]; then
-      downloaded="yes"
-      break
-    fi
-    warn "FFmpeg 当前下载地址不可用或 SHA256 不匹配，未触碰现有运行时，切换备用地址"
-  done
+  if extract_runtime_bundle_member "${archive##*/}" "${checksum}" "${archive}" download; then
+    downloaded="yes"
+  else
+    mapfile -t urls < <(ffmpeg_runtime_download_urls "${arch}")
+    for url in "${urls[@]}"; do
+      [[ -n "${url}" ]] || continue
+      rm -f -- "${archive}" "${archive}.part"
+      if try_download "${url}" "${archive}" "AID FFmpeg ${FFMPEG_RUNTIME_VERSION}（${arch}）" sha256 "${checksum}" \
+          && [[ "$(sha256_file "${archive}" 2>/dev/null || true)" == "${checksum}" ]]; then
+        downloaded="yes"
+        break
+      fi
+      warn "FFmpeg 当前下载地址不可用或 SHA256 不匹配，未触碰现有运行时，切换备用地址"
+    done
+  fi
   [[ "${downloaded}" == "yes" ]] || exit 1
 
   mkdir -p "${workDir}/extract" || exit 1
@@ -2450,6 +2557,30 @@ install_mysql_runtime_libraries() {
   fi
 }
 
+install_centos_stream_9_mysql_compat() (
+  [[ -r /etc/os-release ]] || return 1
+  . /etc/os-release
+  [[ "${ID:-}:${VERSION_ID:-}:$(uname -m)" == centos:9:x86_64 ]] || return 1
+  local work rpmName rpmPath repo rpmHash key
+  work="$(mktemp -d)" || return 1
+  trap 'rm -rf -- "${work}"' EXIT
+  rpmName=ncurses-compat-libs-6.2-12.20210508.el9.x86_64.rpm
+  rpmPath="SIGs/9/infra/x86_64/infra-common/Packages/n/${rpmName}"
+  rpmHash=43dafd6a83b1bf3b111a7bdaaff5a864c6159e51f5c41c4b50f4b44807139262
+  for repo in https://mirrors.aliyun.com/centos-stream https://mirrors.tencent.com/centos-stream https://mirror.stream.centos.org; do
+    try_download "${repo}/${rpmPath}" "${work}/${rpmName}" "CentOS Stream 9 ncurses 兼容库" sha256 "${rpmHash}" && break
+  done
+  [[ -f "${work}/${rpmName}" ]] || return 1
+  key="${work}/RPM-GPG-KEY-CentOS-SIG-Infra"
+  try_download "https://www.centos.org/keys/RPM-GPG-KEY-CentOS-SIG-Infra" "${key}" "CentOS Infra SIG 签名公钥" \
+    && [[ "$(gpg_primary_key_fingerprint "${key}")" == 2F3B7058BCFAC3AB0C72B1BC8B444FCEF56D1621 ]] \
+    && mkdir -m 700 "${work}/rpmdb" \
+    && rpmkeys --dbpath "${work}/rpmdb" --import "${key}" \
+    && rpmkeys --dbpath "${work}/rpmdb" --checksig "${work}/${rpmName}" \
+    || { err "CentOS Infra SIG ncurses 兼容库验签失败"; return 1; }
+  dnf install -y "${work}/${rpmName}"
+)
+
 install_mysql_compat_libraries() {
   local installMode="$1"
   [[ "${installMode}" == "auto" ]] \
@@ -2459,8 +2590,8 @@ install_mysql_compat_libraries() {
       || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libncurses5 \
       || die "MySQL 5.7 的 libtinfo.so.5 兼容库安装失败"
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y ncurses-compat-libs || dnf install -y ncurses-libs \
-      || die "MySQL 5.7 的 ncurses 兼容库安装失败"
+    dnf install -y ncurses-compat-libs || install_centos_stream_9_mysql_compat \
+      || die "MySQL 5.7 缺少 libtinfo.so.5、libncurses.so.5，兼容库安装失败"
   elif command -v yum >/dev/null 2>&1; then
     yum install -y ncurses-compat-libs || yum install -y ncurses-libs \
       || die "MySQL 5.7 的 ncurses 兼容库安装失败"
@@ -2855,7 +2986,7 @@ EOF
   chmod 640 "${mysqlConf}"
   chown root:aidmysql "${mysqlConf}"
   if [[ ! -d "${mysqlData}/mysql" ]]; then
-    "${MYSQL_HOME}/bin/mysqld" --defaults-file="${mysqlConf}" --initialize-insecure --user=aidmysql \
+    TMPDIR="${mysqlRun}" "${MYSQL_HOME}/bin/mysqld" --defaults-file="${mysqlConf}" --initialize-insecure --user=aidmysql \
       || die "MySQL 5.7 数据目录初始化失败"
   fi
   cat > "/etc/systemd/system/${MYSQL_MANAGED_SERVICE}" <<EOF
@@ -4706,7 +4837,7 @@ verify_manifest_signature() { # verify_manifest_signature <清单> <版本>
 fetch_release_manifest() {
   require_download_tools
   mkdir -p "${DATA_ROOT}/packages"
-  RESOLVED_MANIFEST_PATH="${DATA_ROOT}/packages/latest.json"
+  RESOLVED_MANIFEST_PATH="${AID_DEPLOYMENT_WORK_DIR:-${DATA_ROOT}/packages}/latest.json"
   local candidate="${RESOLVED_MANIFEST_PATH}.new" url downloaded="no"
   for url in "${MANIFEST_PRIMARY_URL}" "${MANIFEST_CDN_URL}" "${MANIFEST_FALLBACK_URL}"; do
     [[ -n "${url}" ]] || continue
@@ -5010,10 +5141,94 @@ source_build_failure_diagnostics() { # source_build_failure_diagnostics <构建�
   echo "  完整构建日志: ${buildLog}" >&2
 }
 
+finish_deployment_work() {
+  local status="${1:-0}" work="${AID_DEPLOYMENT_WORK_DIR}"
+  if [[ -d "${work}" && ! -L "${work}" && "$(cat "${work}/.aid-work" 2>/dev/null)" == AID_DEPLOYMENT_WORK_V1 ]] \
+      && rm -rf --one-file-system -- "${work}" && [[ ! -e "${work}" && ! -L "${work}" ]]; then
+    ok "本次安装或升级的临时产物已清理"
+    if [[ "${status}" == 0 ]]; then
+      reclaim_legacy_deployment_work "${AID_DEPLOYMENT_USER_PACKAGE:-}"
+    fi
+    return "${status}"
+  fi
+  err "清理本次部署临时目录失败: ${work}"
+  return 1
+}
+
+reclaim_legacy_deployment_work() {
+  local entry name repo protected="${1:-}" packages="${DATA_ROOT}/packages"
+  aid_data_root_has_ownership_evidence || return 0
+  # 老构建器不认识部署锁。进程存在时不碰旧工作目录。
+  if command -v pgrep >/dev/null 2>&1 \
+      && pgrep -f '(^|/|[[:space:]])build-release-from-source[.]sh([[:space:]]|$)' >/dev/null; then
+    return 0
+  fi
+  for entry in "${DATA_ROOT}/source-build"/v*; do
+    name="${entry##*/}"
+    [[ "${name}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ && -d "${entry}" && ! -L "${entry}" ]] || continue
+    repo="${entry}/repos/server"
+    if [[ "$(cat "${entry}/.aid-build-work" 2>/dev/null)" == AID_SOURCE_BUILD_WORK_V1 ]] \
+        || { [[ -d "${entry}/staging" && -f "${repo}/deploy/aid.sh" \
+          && -f "${repo}/.git/config" && ! -L "${repo}" && ! -L "${repo}/.git" ]] \
+          && grep -Eq 'url = https://(github[.]com|atomgit[.]com)/shijue-aid/aid-studio([.]git)?$' "${repo}/.git/config"; }; then
+      rm -rf --one-file-system -- "${entry}" || die "无法清理旧构建目录: ${entry}"
+      log "已回收旧的源码构建目录: ${entry}"
+    fi
+  done
+  [[ -d "${packages}" && ! -L "${packages}" ]] || return 0
+  for entry in "${packages}"/aid-v*.tar.gz; do
+    name="${entry##*/}"
+    [[ "${name}" =~ ^aid-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\.tar\.gz$ \
+      && -f "${entry}" && ! -L "${entry}" && -f "${entry}.sha256" \
+      && ! -L "${entry}.sha256" && -f "${entry}.manifest.sha256" && ! -L "${entry}.manifest.sha256" ]] || continue
+    [[ -z "${protected}" || ! "${entry}" -ef "${protected}" ]] || continue
+    package_is_source_build "${entry}" || continue
+    rm -f -- "${entry}" "${entry}.sha256" "${entry}.manifest.sha256" "${entry}.part" "${entry}.part.sha256" \
+      || die "无法清理旧的自动构建包: ${entry}"
+    log "已回收旧的自动构建包: ${entry}"
+  done
+}
+
+begin_deployment_work() {
+  local root="${DATA_ROOT}/source-build" work lock executionLock
+  work="${root}/.aid-deployment-work"
+  lock="${root}/.aid-deployment.lock"
+  mkdir -p -- "${root}" || die "无法创建构建目录: ${root}"
+  [[ "$(readlink -f -- "${root}")" == "${root}" && ! -L "${lock}" \
+    && ( ! -e "${lock}" || -f "${lock}" ) ]] || die "部署工作目录或锁不安全: ${root}"
+  # 首装引导交接给受管脚本时，由外层持锁并负责最终清理。
+  if [[ "${AID_DEPLOYMENT_WORK_DIR:-}" == "${work}" && /proc/self/fd/9 -ef "${lock}" ]] \
+      && flock -n 9; then
+    return 0
+  fi
+  exec 9>>"${lock}" || die "无法打开部署任务锁: ${lock}"
+  flock -n 9 || die "已有命令行部署任务正在使用: ${work}"
+  executionLock="${root}/.aid-version-execution.lock"
+  [[ ! -L "${executionLock}" && ( ! -e "${executionLock}" || -f "${executionLock}" ) ]] \
+    || die "版本切换执行锁不安全: ${executionLock}"
+  ( flock -n 8 ) 8>>"${executionLock}" || die "已有版本切换进程正在运行"
+  if [[ -e "${work}" || -L "${work}" ]]; then
+    [[ ! -L "${work}" && -d "${work}" ]] || die "部署工作目录不安全: ${work}"
+    if [[ "$(cat "${work}/.aid-work" 2>/dev/null)" == AID_DEPLOYMENT_WORK_V1 ]]; then
+      rm -rf --one-file-system -- "${work}" || die "无法清理上次中断的部署目录: ${work}"
+    else
+      rmdir -- "${work}" || die "无法确认既有部署工作目录的归属: ${work}"
+    fi
+    log "已回收中断任务的部署工作目录"
+  fi
+  mkdir -m 700 -- "${work}" || die "无法创建部署工作目录: ${work}"
+  printf '%s\n' AID_DEPLOYMENT_WORK_V1 > "${work}/.aid-work" || die "无法写入部署工作目录标记: ${work}"
+  AID_DEPLOYMENT_USER_PACKAGE="${1:-}"
+  export AID_DEPLOYMENT_WORK_DIR="${work}" TMPDIR="${work}"
+  trap 'finish_deployment_work "$?" || exit "$?"' EXIT
+  trap 'exit 130' HUP INT TERM
+}
+
 ensure_source_package() {
   mkdir -p "${DATA_ROOT}/packages"
-  RESOLVED_PACKAGE_PATH="${DATA_ROOT}/packages/aid-v${RESOLVED_VERSION}.tar.gz"
-  local sourceBuildMode builder actual checksumFile manifestFingerprintFile currentManifestFingerprint
+  RESOLVED_PACKAGE_PATH="${AID_DEPLOYMENT_WORK_DIR:-${DATA_ROOT}/packages}/aid-v${RESOLVED_VERSION}.tar.gz"
+  local sourceBuildMode builder actual checksumFile manifestFingerprintFile currentManifestFingerprint sourceWorkDir
+  sourceWorkDir="${AID_DEPLOYMENT_WORK_DIR:-${DATA_ROOT}/source-build}/v${RESOLVED_VERSION}"
   local ownerMode owner modeBits fingerprintOwnerMode fingerprintOwner fingerprintModeBits buildLog buildStamp
   local -a buildStatuses
   require_source_build_mode
@@ -5080,18 +5295,16 @@ ensure_source_package() {
   : > "${buildLog}" || die "无法创建三端构建日志: ${buildLog}"
   chmod 600 "${buildLog}" 2>/dev/null || true
   log "三端编译实时日志将同时保存到: ${buildLog}"
-  # 固定业务标签中的旧 Docker 运行时脚本也识别这两个下载源覆盖项。
-  local AID_FFMPEG_PRIMARY_URL_AMD64="${AID_FFMPEG_PRIMARY_URL_AMD64:-$(ffmpeg_runtime_atomgit_url amd64)}"
-  local AID_FFMPEG_PRIMARY_URL_ARM64="${AID_FFMPEG_PRIMARY_URL_ARM64:-$(ffmpeg_runtime_atomgit_url arm64)}"
-  export AID_FFMPEG_PRIMARY_URL_AMD64 AID_FFMPEG_PRIMARY_URL_ARM64
   if [[ "${sourceBuildMode}" == "docker" ]]; then
+    # 业务标签可能内置旧的下载源；先由当前安装器准备运行时，构建器复检后复用。
+    prepare_ffmpeg_runtime "${AID_DEPENDENCY_INSTALL_MODE:-auto}"
     AID_DATA_ROOT="${DATA_ROOT}" AID_SOURCE_BUILD_MODE="${sourceBuildMode}" AID_MANIFEST_PUBLIC_KEY="${TRUSTED_MANIFEST_PUBLIC_KEY}" \
       AID_DEPENDENCY_REGION="$(dependency_region_setting)" \
       AID_DOWNLOAD_TIMEOUT_SECONDS="$(download_timeout_setting)" \
       AID_DOCKER_MIRRORS="$(docker_mirror_setting)" \
       AID_MANAGER_SCRIPT="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")" \
       sh "${builder}" --version "${RESOLVED_VERSION}" --output "${RESOLVED_PACKAGE_PATH}" \
-        --work-dir "${DATA_ROOT}/source-build/v${RESOLVED_VERSION}"
+        --work-dir "${sourceWorkDir}"
   else
     # 手动构建不继承也不传递 Docker 镜像参数，避免环境残留导致两条链路混用。
     (
@@ -5101,7 +5314,7 @@ ensure_source_package() {
         AID_DOWNLOAD_TIMEOUT_SECONDS="$(download_timeout_setting)" \
         AID_MANAGER_SCRIPT="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")" \
         sh "${builder}" --version "${RESOLVED_VERSION}" --output "${RESOLVED_PACKAGE_PATH}" \
-          --work-dir "${DATA_ROOT}/source-build/v${RESOLVED_VERSION}"
+          --work-dir "${sourceWorkDir}"
     )
   fi 2>&1 | tee -a "${buildLog}"
   buildStatuses=( "${PIPESTATUS[@]}" )
@@ -5111,6 +5324,11 @@ ensure_source_package() {
   fi
   if (( buildStatuses[1] != 0 )); then
     die "三端源码构建日志写入失败；现有部署未被修改，请检查磁盘空间: ${buildLog}"
+  fi
+  # 兼容仍从旧标签获取的构建器，成功出包后立即释放工作副本。
+  if [[ -n "${AID_DEPLOYMENT_WORK_DIR:-}" && -d "${sourceWorkDir}" ]]; then
+    [[ ! -L "${sourceWorkDir}" ]] && rm -rf --one-file-system -- "${sourceWorkDir}" \
+      || die "无法清理本次源码构建目录: ${sourceWorkDir}"
   fi
   validate_release_package "${RESOLVED_PACKAGE_PATH}" no
   actual="$(sha256_file "${RESOLVED_PACKAGE_PATH}" || true)"
@@ -5205,7 +5423,7 @@ extract_installer_from_package() { # extract_installer_from_package <发布包>
   fi
   installerEntry="${scriptEntry%/deploy/aid.sh}"
 
-  extractRoot="$(mktemp -d "${DATA_ROOT}/.installer-extract.XXXXXX")" \
+  extractRoot="$(mktemp -d "${AID_DEPLOYMENT_WORK_DIR:-${DATA_ROOT}}/.installer-extract.XXXXXX")" \
     || { rm -f -- "${listFile}"; err "无法创建安装器临时目录"; return 1; }
   # 使用归档清单中的真实目录名直接提取。GNU tar 会递归提取该目录，同时保留
   # ./installer 与 installer 的区别；-T 会规范化 ./ 前缀，因此这里不能使用清单文件。
@@ -5277,7 +5495,10 @@ bootstrap_installer_if_needed() { # bootstrap_installer_if_needed <发布包> <i
   install_management_command
   export AID_RELEASE_CHANNEL="${REQUESTED_RELEASE_CHANNEL:-${RESOLVED_CHANNEL:-auto}}"
   export AID_TRUSTED_SOURCE_PACKAGE=1
-  exec bash "${MANAGED_SCRIPT}" "${action}" "${package}"
+  # 等待受管安装完成，让持锁的引导进程有机会执行 EXIT 清理。
+  local status=0
+  bash "${MANAGED_SCRIPT}" "${action}" "${package}" || status=$?
+  exit "${status}"
 }
 
 refresh_managed_installer() { # refresh_managed_installer <发布包>
@@ -5302,7 +5523,7 @@ install_management_command() {
     return 0
   fi
   ln -s "${MANAGED_SCRIPT}" "${commandPath}" 2>/dev/null \
-    && ok "已安装管理命令: sudo aid（更新: sudo aid update；查看地址: sudo aid default；数据库: sudo aid mysql）" \
+    && ok "已安装管理命令: sudo ${commandPath}（更新: update；查看地址: default；数据库: mysql）" \
     || warn "无法创建 ${commandPath}，不影响部署与后台在线升级"
 }
 
@@ -5438,7 +5659,7 @@ confirm_first_install() { # confirm_first_install <docker|manual>
     echo "  后端端口 : $(conf_get BACKEND_PORT 8080)"
     warn "非 Docker 部署会按配置检查或准备宿主机依赖、写入 AID systemd/Nginx 配置并占用以上端口；不会自动开放防火墙或修改域名解析"
   fi
-  risk "后台初始账号为 admin / admin123，首次登录后必须立即修改密码"
+  log "全新部署将为仍使用初始口令的后台管理员生成随机密码"
   warn "安装成功后，本地存储可以选择自动导入官方资源包；云存储请参考教程手动上传"
   unmanagedEntry="$(first_install_unmanaged_entry "${mode}" || true)"
   if [[ -n "${unmanagedEntry}" ]]; then
@@ -6155,29 +6376,6 @@ place_artifacts() { # place_artifacts <包路径>
   place_updater_binary "${pkgRoot}"
 }
 
-# 在替换任何三端产物前独立提取增量 SQL。这样即使历史迁移失败，当前正在
-# 使用的 JAR 和静态文件仍保持原状；SQL 自身必须幂等，以兼容 MySQL DDL
-# 隐式提交后重新执行的恢复场景。
-stage_release_sql() { # stage_release_sql <包路径>
-  local package="$1" tmpDir pkgRoot sub
-  tmpDir="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '${tmpDir}'; trap - RETURN" RETURN
-  tar -xzf "${package}" -C "${tmpDir}" || die "发布包解压失败: ${package}"
-  pkgRoot="${tmpDir}"
-  if [[ ! -d "${pkgRoot}/backend" ]]; then
-    sub="$(find "${tmpDir}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-    [[ -n "${sub}" && -d "${sub}/backend" ]] && pkgRoot="${sub}"
-  fi
-  [[ -d "${pkgRoot}/backend" ]] || die "发布包结构无效，无法定位服务端产物"
-
-  rm -rf "${DATA_ROOT}/packages/pending-sql"
-  if [[ -d "${pkgRoot}/sql" ]]; then
-    mkdir -p "${DATA_ROOT}/packages/pending-sql"
-    cp -r "${pkgRoot}/sql/." "${DATA_ROOT}/packages/pending-sql/"
-  fi
-}
-
 # 从发布包安装升级器二进制到 DATA_ROOT/app/updater/aid-updater（包内无 updater/ 时静默跳过）
 place_updater_binary() { # place_updater_binary <包根目录>
   local pkgRoot="$1" archSuffix binSource
@@ -6201,7 +6399,7 @@ ensure_official_updater_binary() {
   local platform updaterVersion currentVersion currentComparison currentBinarySha
   local recordedVersion recordedPackageSha recordedBinarySha installedBinarySha
   local url mirror sha256 archive listFile extractDir source actual
-  local downloaded="no"
+  local downloaded="no" bundleMode=cached
   case "$(uname -m)" in
     x86_64) platform="linux_amd64" ;;
     aarch64) platform="linux_arm64" ;;
@@ -6248,15 +6446,22 @@ ensure_official_updater_binary() {
 
   require_download_tools
   mkdir -p "${DATA_ROOT}/packages" "${DATA_ROOT}/app/updater"
-  archive="${DATA_ROOT}/packages/aid-updater_${updaterVersion}_${platform}.tar.gz"
-  for source in "${url}" "${mirror}"; do
-    [[ -n "${source}" ]] || continue
-    if try_download "${source}" "${archive}" "AID 升级器 ${updaterVersion}（${platform}）" sha256 "${sha256}"; then
-      downloaded="yes"
-      break
-    fi
-    warn "升级器当前下载地址不可用，切换备用地址"
-  done
+  archive="${AID_DEPLOYMENT_WORK_DIR:-${DATA_ROOT}/packages}/aid-updater_${updaterVersion}_${platform}.tar.gz"
+  if [[ "${1:-}" == with-runtime && "${updaterVersion}" == "${RUNTIME_BUNDLE_RELEASE_VERSION}" ]] && ! (ffmpeg_runtime_usable >/dev/null 2>&1); then
+    bundleMode=download
+  fi
+  if extract_runtime_bundle_member "${archive##*/}" "${sha256}" "${archive}" "${bundleMode}"; then
+    downloaded="yes"
+  else
+    for source in "${url}" "${mirror}"; do
+      [[ -n "${source}" ]] || continue
+      if try_download "${source}" "${archive}" "AID 升级器 ${updaterVersion}（${platform}）" sha256 "${sha256}"; then
+        downloaded="yes"
+        break
+      fi
+      warn "升级器当前下载地址不可用，切换备用地址"
+    done
+  fi
   [[ "${downloaded}" == "yes" ]] || die "AID 升级器 ${updaterVersion} 下载失败"
   actual="$(sha256_file "${archive}" || true)"
   [[ "${actual}" == "${sha256}" ]] || die "AID 升级器 SHA256 校验失败"
@@ -6271,7 +6476,7 @@ ensure_official_updater_binary() {
     die "升级器压缩包结构不安全，已拒绝解压"
   fi
   rm -f -- "${listFile}"
-  extractDir="$(mktemp -d "${DATA_ROOT}/packages/.updater-extract.XXXXXX")"
+  extractDir="$(mktemp -d "${AID_DEPLOYMENT_WORK_DIR:-${DATA_ROOT}/packages}/.updater-extract.XXXXXX")"
   if ! tar --no-same-owner --no-same-permissions -xzf "${archive}" -C "${extractDir}"; then
     rm -rf -- "${extractDir}"
     die "升级器压缩包解压失败"
@@ -6282,6 +6487,7 @@ ensure_official_updater_binary() {
   install -m 0755 "${source}" "${DATA_ROOT}/app/updater/aid-updater" \
     || { rm -rf -- "${extractDir}"; die "升级器二进制落盘失败"; }
   rm -rf -- "${extractDir}"
+  rm -f -- "${archive}" || die "已落盘的升级器临时压缩包清理失败: ${archive}"
   currentVersion="$("${DATA_ROOT}/app/updater/aid-updater" -version 2>/dev/null || true)"
   [[ "${currentVersion}" == "${updaterVersion}" ]] \
     || die "升级器二进制版本校验失败"
@@ -6366,7 +6572,7 @@ write_updater_config() { # write_updater_config <docker|manual>
   "pollIntervalSeconds": 3,
   "heartbeatIntervalSeconds": 5,
   "downloadTimeoutSeconds": 600,
-  "keepBackups": 3,
+  "keepBackups": 1,
   "sourceBuildScript": "${INSTALLER_ROOT}/deploy/${SOURCE_BUILDER_NAME}",
   "sourceBuildTimeoutSeconds": 7200,
   "install": {
@@ -6623,6 +6829,79 @@ repair_first_install_manifest_url() { # <docker|manual> <安装前部署状态>
   fi
 }
 
+first_install_mysql() { # <docker|manual>，SQL 从标准输入传入
+  if [[ "$1" == docker ]]; then
+    docker_mysql_tool mysql --batch --skip-column-names --default-character-set=utf8mb4 "$(env_get DB_NAME aid)"
+  else
+    managed_mysql_business_exec mysql "$(conf_get DB_HOST 127.0.0.1)" "$(conf_get DB_PORT 3306)" \
+      "$(conf_get DB_NAME aid)" "$(conf_get DB_USERNAME aid)" "$(conf_get DB_PASSWORD '')" \
+      --batch --skip-column-names --default-character-set=utf8mb4
+  fi
+}
+
+configure_first_install_admin() (
+  [[ "$2" == none ]] || return 0
+  umask 077
+  local mode="$1" seedLine seedHash currentHash password passwordRecord changed
+  local receipt="${CONFIG_ROOT}/initial-admin-password"
+  # Keep the bootstrap password within UserConstants.PASSWORD_MAX_LENGTH.
+  local passwordLength=20 passwordPattern
+  passwordPattern="^[a-zA-Z0-9]{${passwordLength}}$"
+  seedLine="$(grep -m 1 -E "^INSERT INTO \`sys_user\` VALUES \(1, [^,]+, 'admin'," "${REPO_DIR}/sql/aid-init.sql" || true)"
+  [[ "${seedLine}" =~ (\$2[aby]\$[0-9]{2}\$[A-Za-z./0-9]{53}) ]] || die "无法核对安装包中的后台初始化账号"
+  seedHash="${BASH_REMATCH[1]}"
+  currentHash="$(first_install_mysql "${mode}" <<'SQL'
+SELECT password FROM sys_user WHERE user_id=1 AND user_name='admin' AND del_flag='0';
+SQL
+  )" || die "无法核对后台管理员初始化状态"
+  [[ "${currentHash}" == "${seedHash}" ]] || return 0
+  if ! command -v htpasswd >/dev/null 2>&1; then
+    [[ "$(dependency_install_mode "${mode}")" == auto ]] \
+      || die "安全初始化管理员需要 htpasswd，请通过发行版软件源安装 apache2-utils 或 httpd-tools"
+    install_os_packages "后台密码初始化工具" "apache2-utils" "httpd-tools"
+  fi
+  if [[ ! -e "${receipt}" && ! -L "${receipt}" ]]; then
+    password="$(gen_secret)"
+    password="${password:0:passwordLength}"
+    [[ "${password}" =~ ${passwordPattern} ]] || die "无法生成随机后台密码"
+    ( set -o noclobber; printf '%s\n' "${password}" > "${receipt}" ) || die "无法保存后台初始化密码"
+  fi
+  [[ -f "${receipt}" && ! -L "${receipt}" && "$(stat -c '%u:%a:%h' -- "${receipt}")" == '0:600:1' ]] \
+    || die "后台初始化密码文件权限或所有权不正确: ${receipt}"
+  IFS= read -r password < "${receipt}" || die "无法读取后台初始化密码"
+  [[ "${password}" =~ ${passwordPattern} ]] || die "后台初始化密码文件格式无效"
+  passwordRecord="$(printf '%s\n' "${password}" | htpasswd -niBC 10 admin)" || die "后台初始密码摘要生成失败"
+  passwordRecord="${passwordRecord#admin:}"
+  [[ "${passwordRecord}" =~ ^\$2[aby]\$10\$[A-Za-z./0-9]{53}$ ]] || die "后台初始密码摘要格式无效"
+  changed="$(first_install_mysql "${mode}" <<SQL
+UPDATE sys_user SET password='${passwordRecord}', pwd_update_date=NOW()
+WHERE user_id=1 AND user_name='admin' AND del_flag='0' AND BINARY password='${seedHash}';
+SELECT ROW_COUNT();
+SQL
+  )" || die "后台管理员初始化失败，服务未启动"
+  [[ "${changed}" == 1 ]] || die "后台管理员在初始化期间发生变化，请核对账号后再启动"
+  ok "已生成随机后台初始密码，保存在 ${receipt}（仅 root 可读）"
+)
+
+configure_first_install_local_storage() { # <docker|manual> <安装前部署状态>
+  [[ "$2" == none ]] || return 0
+  local origin="${AID_LOCAL_RESOURCE_ORIGIN:-}"
+  [[ -n "${origin}" ]] || return 0
+  [[ "${origin}" =~ ^https?://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$ ]] \
+    || die "AID_LOCAL_RESOURCE_ORIGIN 必须为 HTTP(S) 地址，可含端口且不含路径"
+  if [[ "${origin}" =~ :([0-9]{1,5})$ ]]; then
+    validate_port AID_LOCAL_RESOURCE_ORIGIN "${BASH_REMATCH[1]}"
+  fi
+  first_install_mysql "$1" <<SQL
+UPDATE aid_config AS target
+INNER JOIN aid_config AS storage_mode ON storage_mode.category='oss' AND storage_mode.config_name='uploadMode'
+  AND storage_mode.del_flag='0' AND storage_mode.config_value='local'
+SET target.config_value='${origin}'
+WHERE target.category='oss' AND target.config_name='resourceAccessDomain'
+  AND target.del_flag='0' AND COALESCE(target.config_value, '')='';
+SQL
+}
+
 docker_container_env_value() { # docker_container_env_value <容器> <变量名>
   docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$1" 2>/dev/null \
     | sed -n "s/^$2=//p" | head -n 1
@@ -6729,7 +7008,18 @@ ensure_mysql_ready() {
     previousRootPwd="$(docker_container_env_value aid-mysql MYSQL_ROOT_PASSWORD || true)"
     # MySQL 官方镜像首次初始化会在临时实例中导入 /docker-entrypoint-initdb.d。
     # 空数据目录先等待 Compose 健康检查完成，再执行账号同步，避免与初始化 SQL 并发。
-    [[ -d "${DATA_ROOT}/mysql-data/mysql" ]] || freshData="1"
+    if [[ ! -d "${DATA_ROOT}/mysql-data/mysql" ]]; then
+      freshData="1"
+      # The container runs its entrypoint as mysql. Older build archives can
+      # have root-only modes when the builder inherited umask 077.
+      local initSqlDir="${REPO_DIR}/sql"
+      if [[ -L "${initSqlDir}" || -L "${initSqlDir}/aid-init.sql" || ! -f "${initSqlDir}/aid-init.sql" ]] ||
+         ! chmod 0755 -- "${initSqlDir}" ||
+         ! chmod 0644 -- "${initSqlDir}/aid-init.sql"; then
+        err "无法准备内置 MySQL 的公开初始化 SQL: ${initSqlDir}/aid-init.sql"
+        return 1
+      fi
+    fi
     if ! compose_cmd up -d mysql; then
       docker_container_diagnostics aid-mysql "内置 MySQL 5.7"
       return 1
@@ -7241,6 +7531,64 @@ stop_unhealthy_docker_application_containers() {
   (( stopped == 0 )) || ok "异常业务容器已止损；数据服务不受影响"
 }
 
+verify_docker_gateway() { # verify_docker_gateway <container> <http|https>
+  local gateway="$1" protocol="$2" container ids network shared=no networks=()
+  local webUrl adminUrl backendUrl backendOrigin backendBody proxyBody webBody
+  local -a curlArgs=(-fsS --noproxy '*' --connect-timeout 3 --max-time 10)
+
+  for container in "$gateway" aid-web aid-server; do
+    ids="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{if .NetworkID}}{{println .NetworkID}}{{end}}{{end}}' "$container")" || return 1
+    networks+=("$ids")
+  done
+  while IFS= read -r network; do
+    [[ -n "$network" ]] || continue
+    if grep -Fxq -- "$network" <<< "${networks[1]}" && grep -Fxq -- "$network" <<< "${networks[2]}"; then
+      shared=yes
+      break
+    fi
+  done <<< "${networks[0]}"
+  if [[ "$shared" != yes ]]; then
+    err "$gateway、aid-web、aid-server 没有共同的 Docker 网络"
+    docker inspect --format '{{.Name}} {{range $name, $net := .NetworkSettings.Networks}}{{$name}}={{$net.NetworkID}} {{end}}' \
+      "$gateway" aid-web aid-server || true
+    return 1
+  fi
+
+  backendUrl="http://127.0.0.1:$(setting_get BACKEND_PORT 8080)/"
+  if [[ "$protocol" == https ]]; then
+    local publicDomain adminDomain port
+    publicDomain="$(env_get HTTPS_PUBLIC_DOMAIN)"
+    adminDomain="$(env_get HTTPS_ADMIN_DOMAIN)"
+    port="$(env_get HTTPS_PORT 443)"
+    # Local routing probe. Certificate validation is handled by validate_https_runtime.
+    curlArgs+=(-k --resolve "${publicDomain}:${port}:127.0.0.1" --resolve "${adminDomain}:${port}:127.0.0.1")
+    webUrl="https://${publicDomain}:${port}/"
+    adminUrl="https://${adminDomain}:${port}/prod-api/"
+  else
+    webUrl="http://127.0.0.1:$(env_get HTTP_PORT 80)/"
+    adminUrl="http://127.0.0.1:$(env_get ADMIN_PORT 8089)/prod-api/"
+  fi
+  # The backend root is the same read-only endpoint used by wait_backend_healthy.
+  if ! webBody="$(curl "${curlArgs[@]}" "$webUrl")" || [[ "${webBody,,}" != *'<html'* ]]; then
+    err "$gateway 的 Web 代理未返回用户端 HTML: $webUrl"
+    return 1
+  fi
+  if ! proxyBody="$(curl "${curlArgs[@]}" "$adminUrl")" || [[ -z "$proxyBody" ]]; then
+    err "$gateway 的后台代理未返回后端响应: $adminUrl"
+    return 1
+  fi
+  # External origins may only be reachable from Docker. Probe those through
+  # the gateway and compare response bodies for the local-backend case.
+  backendOrigin="$(setting_get NGINX_BACKEND_ORIGIN '')"
+  if [[ -z "$backendOrigin" || "$backendOrigin" == http://aid-server:8080 ]]; then
+    if ! backendBody="$(curl "${curlArgs[@]}" "$backendUrl")" || [[ "$proxyBody" != "$backendBody" ]]; then
+      err "$gateway 的后台代理响应与本机后端不一致: $adminUrl"
+      return 1
+    fi
+  fi
+  ok "$gateway：Docker 网络、Web 用户端与后端代理均通过验证"
+}
+
 start_docker_application_stack() {
   validate_https_runtime
   render_managed_nginx docker || return 1
@@ -7275,7 +7623,9 @@ start_docker_application_stack() {
     stop_failed_docker_service aid-nginx "Nginx 网关"
     return 1
   fi
-  if ! wait_docker_container_healthy aid-nginx "Nginx 网关" 120; then
+  if ! wait_docker_container_healthy aid-nginx "Nginx 网关" 120 \
+      || ! verify_docker_gateway aid-nginx http; then
+    docker_container_diagnostics aid-nginx "Nginx 网关"
     stop_failed_docker_service aid-nginx "Nginx 网关"
     return 1
   fi
@@ -7285,7 +7635,7 @@ start_docker_application_stack() {
       stop_failed_docker_service aid-nginx-https "HTTPS 入口"
       return 1
     fi
-    if ! wait_https_healthy; then
+    if ! wait_https_healthy || ! verify_docker_gateway aid-nginx-https https; then
       docker_container_diagnostics aid-nginx-https "HTTPS 入口"
       stop_failed_docker_service aid-nginx-https "HTTPS 入口"
       return 1
@@ -7527,18 +7877,23 @@ print_access_info() { # print_access_info [strict]
   echo ""
   echo "数据库初始化管理员："
   echo "  初始账号: admin"
-  echo "  初始密码: admin123"
-  echo "  说明：以上是 sql/aid-init.sql 的数据库初始化默认值；若已修改，请以数据库当前账号为准。"
-  echo "        密码以不可逆摘要保存，无法通过本命令反查；本命令不会重置账号、密码或数据库。"
+  if [[ -f "${CONFIG_ROOT}/initial-admin-password" && ! -L "${CONFIG_ROOT}/initial-admin-password" ]]; then
+    echo "  初始密码文件（仅 root 可读）: ${CONFIG_ROOT}/initial-admin-password"
+    echo "  改密后请删除该文件，以后台当前密码为准。"
+  else
+    echo "  密码以后台当前设置为准。本命令不会反查或重置密码。"
+  fi
   print_https_guidance "${mode}" "${configFile}" "${publicIp}" "${adminPath}"
-  print_mysql_access_guidance "${mode}" "${publicIp}" "${configFile}"
+  if [[ "${strict}" == strict ]]; then
+    print_mysql_access_guidance "${mode}" "${publicIp}" "${configFile}"
+  fi
   echo "AID FFmpeg 运行时："
   print_ffmpeg_runtime_paths
   echo "AID 中文字体："
   echo "  后台推荐 中文字体路径: ${AID_CJK_FONT_PATH}"
   echo "数据目录: ${DATA_ROOT}（程序/上传/日志/数据/备份全部在此）"
   echo "配置文件: ${configFile}（菜单「修改配置」可调整）"
-  [[ -f "${MANAGED_SCRIPT}" ]] && echo "管理命令: sudo aid 或 sudo bash ${MANAGED_SCRIPT}"
+  [[ -f "${MANAGED_SCRIPT}" ]] && echo "管理命令: sudo ${AID_LOCAL_BIN_DIR}/aid status"
   return 0
 }
 
@@ -7593,7 +7948,10 @@ import_official_assets_locally() (
     --no-same-owner --no-same-permissions --wildcards -- \
     "$archiveRoot/asset-checksums.txt" "$archiveRoot/files/aid/*" || return 1
   [[ -d "$stage/files/aid" && -s "$stage/asset-checksums.txt" ]] || return 1
-  ( cd "$stage" && sha256sum --check --strict --quiet asset-checksums.txt ) || return 1
+  # 归档摘要校验后兼容历史 Windows 打包清单，仅转换行尾 CR。
+  ( cd "$stage" &&
+    sed 's/\r$//' asset-checksums.txt > asset-checksums.lf &&
+    sha256sum --check --strict --quiet asset-checksums.lf ) || return 1
   chown -R --reference="$root" -- "$stage/files/aid" || return 1
   chmod -R u=rwX,go=rX -- "$stage/files/aid" || return 1
   # 同一文件系统内提交。若后台已上传非空目录，安装器不会覆盖它。
@@ -7613,12 +7971,23 @@ offer_official_assets_import() { # offer_official_assets_import <部署前的模
 
   section "安装已完成"
   echo "官方资源包约 681 MB。跳过后可以在后台「项目升级配置 → 官方资源」手动导入。"
-  if [[ "${AID_ASSUME_YES:-0}" == 1 || ( ! -t 0 && ! -t 1 && ! -t 2 ) ]]; then
-    return 0
-  fi
-  if ! IFS= read -r -p "现在自动下载并导入官方资源包？（y/n）[n]: " answer </dev/tty; then
-    return 0
-  fi
+  case "${AID_IMPORT_OFFICIAL_ASSETS:-}" in
+    y|Y) answer=y ;;
+    n|N) return 0 ;;
+    '')
+      if [[ "${AID_ASSUME_YES:-0}" == 1 || ( ! -t 0 && ! -t 1 && ! -t 2 ) ]]; then
+        return 0
+      fi
+      ( : </dev/tty ) 2>/dev/null || return 0
+      if ! IFS= read -r -p "现在自动下载并导入官方资源包？（y/n）[n]: " answer </dev/tty; then
+        return 0
+      fi
+      ;;
+    *)
+      warn "AID_IMPORT_OFFICIAL_ASSETS 只支持 y 或 n，可按官方教程手动导入：$OFFICIAL_ASSETS_GUIDE"
+      return 0
+      ;;
+  esac
   case "$answer" in
     y|Y)
       if ! import_official_assets_locally; then
@@ -7640,6 +8009,7 @@ do_install_docker() (
   local existingMode package targetVersion targetChannel
   existingMode="$(detect_mode)"
   confirm_reinstall docker || return 0
+  begin_deployment_work "${1:-}"
   # 配置是部署的第一道闸门：完成生成、编辑、校验和人工确认后才检查环境或拉取源码。
   ensure_env_file
   confirm_initial_configuration docker
@@ -7674,6 +8044,8 @@ do_install_docker() (
   prepare_docker_runtime_dependencies \
     || die "前置服务检查失败，AID 主程序尚未启动；请按上方组件日志处理后重试"
   repair_first_install_manifest_url docker "${existingMode}"
+  configure_first_install_admin docker "${existingMode}"
+  configure_first_install_local_storage docker "${existingMode}" || die "初始化本地资源访问地址失败"
   ensure_admin_entry_code docker
   disable_unused_docker_services
 
@@ -7972,6 +8344,7 @@ do_install_manual() (
   local existingMode package targetVersion targetChannel
   existingMode="$(detect_mode)"
   confirm_reinstall manual || return 0
+  begin_deployment_work "${1:-}"
   # 手动部署同样先完成配置，避免安装环境或源码构建结束后才发现数据库参数不可用。
   ensure_conf_file
   confirm_initial_configuration manual
@@ -8014,6 +8387,8 @@ do_install_manual() (
     ok "数据库初始化完成"
   fi
   repair_first_install_manifest_url manual "${existingMode}"
+  configure_first_install_admin manual "${existingMode}"
+  configure_first_install_local_storage manual "${existingMode}" || die "初始化本地资源访问地址失败"
   ensure_admin_entry_code manual
 
   place_artifacts "${package}"
@@ -8161,13 +8536,13 @@ version_switch_incomplete() { # version_switch_incomplete <产物版本> <目标
      && "${successfulVersion}" != "${targetVersion}" ]]
 }
 
-do_update() {
+do_update() (
   require_root
-  local mode package supplied current target comparison successfulVersion go backupDir dist old targetChannel repairMode=0
-  local hasPendingSql=0 migrationStopped=0 schemaFingerprint=''
+  local mode package supplied current target comparison successfulVersion go targetChannel repairMode=0
   mode="$(detect_mode)"
   [[ "${mode}" != "none" ]] || die "尚未部署，请先执行首次部署"
   ensure_no_active_version_task || return 1
+  begin_deployment_work "${1:-}"
   # 先用当前远程引导脚本/受管模板补齐旧配置；仅追加缺失键，原值不变且同目录留备份。
   if [[ "${mode}" == "docker" ]]; then ensure_env_file; else ensure_conf_file; fi
   export AID_DEPENDENCY_INSTALL_MODE="$(dependency_install_mode "${mode}")"
@@ -8189,9 +8564,9 @@ do_update() {
     resolve_official_release
     target="${RESOLVED_VERSION}"
     # 升级器是主程序升级的执行与回滚代理，必须优先恢复/更新并通过健康检查。
-    # 这里只下载当前架构的小型升级器制品，不会提前构建或替换三端主程序。
+    # FFmpeg 同时需要准备时可共用本次任务已下载的运行依赖包。
     section "主程序升级前检查在线升级器"
-    ensure_official_updater_binary
+    ensure_official_updater_binary with-runtime
     setup_updater "${mode}" || die "升级器未就绪，主程序升级已中止"
     install_management_command
     if [[ "${current}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
@@ -8262,185 +8637,79 @@ do_update() {
     ensure_source_package
     package="${RESOLVED_PACKAGE_PATH}"
   fi
-  # 再与目标版本包中的官方模板比较，确保跨多个版本更新时不会漏掉中间新增参数。
-  merge_release_configuration "${package}" "${mode}"
-  if [[ "${mode}" == "docker" ]]; then ensure_env_file; else ensure_conf_file; fi
-  export AID_DEPENDENCY_INSTALL_MODE="$(dependency_install_mode "${mode}")"
-  [[ "${mode}" != "docker" ]] || prepare_docker_runtime_images
-
-  # docker 模式先确保数据库容器可用（备份与增量 SQL 都依赖它）
-  ensure_mysql_ready || die "数据库未就绪，升级已中止（未做任何变更）"
-  # 兼容早期初始化脚本留下的空访问码；已有非空访问码绝不修改。
-  ensure_admin_entry_code "${mode}"
-
-  # 先独立提取并检查迁移集合。存在 SQL 时先停止业务写入，再把迁移历史表与
-  # 业务结构一起纳入快照，避免跨多个旧版本升级期间出现备份后新增数据。
-  stage_release_sql "${package}"
-  if [[ -d "${DATA_ROOT}/packages/pending-sql" ]] && ls "${DATA_ROOT}/packages/pending-sql"/*.sql >/dev/null 2>&1; then
-    hasPendingSql=1
-    if [[ "${mode}" == "docker" ]] || command -v mysql >/dev/null 2>&1; then
-      if [[ "${mode}" == "docker" ]]; then
-        docker stop aid-server >/dev/null 2>&1 || true
-        [[ "$(docker inspect --format '{{.State.Running}}' aid-server 2>/dev/null || echo false)" != "true" ]] \
-          || die "无法停止 AID 后端写入，数据库迁移未开始"
-      else
-        systemctl stop aid >/dev/null 2>&1 || true
-        ! systemctl is-active --quiet aid \
-          || die "无法停止 AID 后端写入，数据库迁移未开始"
-      fi
-      migrationStopped=1
-      ensure_sql_history || { do_restart || true; die "无法准备数据库迁移历史，升级已中止"; }
-      schemaFingerprint="$(database_schema_fingerprint)" \
-        || { do_restart || true; die "无法读取升级前数据库结构，升级已中止"; }
-      ok "已停止业务写入并建立一致性迁移快照边界"
-    else
-      die "升级包含数据库迁移，但未检测到 mysql 客户端；现有程序产物未替换"
-    fi
+  local installedUpdater="${DATA_ROOT}/app/updater/aid-updater"
+  local updater="${installedUpdater}" cliPackage="${package}" entry
+  # 旧升级器不支持统一备份流程时，从已校验包中取对应架构的新版升级器执行。
+  if ! "${updater}" -help 2>&1 | grep -F -- '-apply-local-package' >/dev/null; then
+    entry="$(tar -tzf "${package}" | awk -v arch="$(uname -m)" '
+      (arch=="x86_64" && /(^|\/)updater\/aid-updater_linux_amd64$/) ||
+      (arch=="aarch64" && /(^|\/)updater\/aid-updater_linux_arm64$/) { matchpath=$0; count++ }
+      END { if (count==1) print matchpath }
+    ')" || die "无法读取安装包中的升级器"
+    [[ -n "${entry}" ]] || die "安装包缺少支持备份保护的升级器"
+    updater="${AID_DEPLOYMENT_WORK_DIR}/aid-updater"
+    tar -xOzf "${package}" -- "${entry}" > "${updater}" || die "无法解出升级器"
+    chmod 700 "${updater}"
   fi
-
-  # 升级前自动完整备份（产物 + 数据库 + 版本标记），供菜单「回滚」还原
-  backupDir="${DATA_ROOT}/backups/upgrade-$(date +%Y%m%d%H%M%S)-v${current}"
-  mkdir -p "${backupDir}"
-  [[ -f "${DATA_ROOT}/app/aid-admin.jar" ]] && cp "${DATA_ROOT}/app/aid-admin.jar" "${backupDir}/"
-  [[ -f "${DATA_ROOT}/app/build-info.json" ]] && cp "${DATA_ROOT}/app/build-info.json" "${backupDir}/"
-  for dist in admin-dist web-dist; do
-    [[ -d "${DATA_ROOT}/app/${dist}" ]] && cp -r "${DATA_ROOT}/app/${dist}" "${backupDir}/"
-  done
-  log "备份数据库（升级前快照）..."
-  if ! backup_database "${backupDir}/db.sql.gz"; then
-    (( migrationStopped == 0 )) || do_restart || true
-    die "数据库备份失败，升级已中止（未做任何变更）"
+  if [[ "${mode}" == docker && "${package}" != "${DATA_ROOT}/"* ]]; then
+    cliPackage="${AID_DEPLOYMENT_WORK_DIR}/local-package.tar.gz"
+    cp -- "${package}" "${cliPackage}" || die "无法将本地包暂存到升级器可访问的目录"
   fi
-  echo "${current}" > "${backupDir}/version.txt"
-  ok "升级前完整备份已生成: ${backupDir}"
-  # 升级备份保留最近 3 份，从旧到新清理
-  ls -1d "${DATA_ROOT}/backups"/upgrade-* 2>/dev/null | sort | head -n -3 | while read -r old; do
-    rm -rf "${old}" && log "已清理过期升级备份: ${old}"
-  done
-
-  # 必须先执行数据库迁移，再切换三端程序产物；按 schema history 跳过成功脚本。
-  # 失败时清空当前 schema 后完整导回快照，防止残留新表、字段或错误的 SUCCESS 记录。
-  if (( hasPendingSql == 1 )); then
-    log "执行包内增量 SQL..."
-    if ! run_sql_dir_with_history "${DATA_ROOT}/packages/pending-sql"; then
-      err "增量 SQL 执行失败，正在恢复升级前数据库"
-      if ! restore_database_clean "${backupDir}/db.sql.gz" "${schemaFingerprint}"; then
-        die "SQL 执行失败且数据库自动恢复未通过结构校验；服务保持停止，请使用备份人工处理: ${backupDir}/db.sql.gz"
-      fi
-      do_restart || die "数据库已恢复，但原版本服务重启失败，请检查部署日志"
-      die "SQL 执行失败，数据库与原版本服务均已恢复；修复迁移后可安全重试"
-    fi
-    ok "增量 SQL 执行完成"
-  fi
-
-  place_artifacts "${package}"
-
-  # 包中不包含用户维护的 .env；先刷新受版本控制的 Compose/Nginx/部署脚本，
-  # 本次重启即可使用新版模板，同时保留已有配置与密钥。
-  refresh_managed_installer "${package}" || die "新版部署模板刷新失败，服务尚未重启"
-  do_restart
-  wait_backend_healthy || die "新版本未就绪，可执行菜单「回滚到升级前备份」还原: ${backupDir}"
-  updater_runtime_ready "${mode}" || die "主程序已更新，但升级器健康检查未通过"
-  target="$(current_version)"
-  [[ "${target}" == "未知" ]] && target="${RESOLVED_VERSION:-$(version_from_package "${package}")}"
+  run_version_updater "${mode}" "${updater}" -apply-local-package "${cliPackage}" \
+    -current-version "${current}" -target-version "${target}" || die "升级未完成，请查看以上原因"
   targetChannel="${REQUESTED_RELEASE_CHANNEL:-$(state_get RELEASE_CHANNEL auto)}"
   state_set CURRENT_VERSION "${target}"
   state_set RELEASE_CHANNEL "${targetChannel}"
+  if [[ "${updater}" != "${installedUpdater}" ]]; then
+    mkdir -p -- "$(dirname "${installedUpdater}")" \
+      && chmod 755 "${updater}" \
+      && mv -f -- "${updater}" "${installedUpdater}" \
+      && setup_updater "${mode}" \
+      || die "三端已切换到 ${target}，在线升级器未启动，请运行 sudo aid setup-updater"
+  fi
   install_management_command
   ok "已更新到 ${target}"
   print_access_info
-}
+)
 
-# ----------------------------------------------------------------------------
-# 回滚：从最近的升级前备份中选择还原（最多展示 3 份）
-# ----------------------------------------------------------------------------
-do_rollback() {
-  require_root
-  local mode; mode="$(detect_mode)"
-  [[ "${mode}" != "none" ]] || die "尚未部署"
-  ensure_no_active_version_task || return 1
-
-  # 收集最近 3 份升级备份（目录名含时间戳，字典序即时间序，取最新 3 份倒序展示）
-  local backups=()
-  while IFS= read -r line; do backups+=("${line}"); done < <(ls -1d "${DATA_ROOT}/backups"/upgrade-* 2>/dev/null | sort -r | head -n 3)
-  [[ ${#backups[@]} -gt 0 ]] || die "没有可用的升级前备份（只有通过菜单「更新」升级过才会生成）"
-
-  echo ""
-  echo "可回滚的升级前备份（最近 ${#backups[@]} 份）："
-  local i dir ver stamp
-  for i in "${!backups[@]}"; do
-    dir="${backups[$i]}"
-    ver="$(cat "${dir}/version.txt" 2>/dev/null || echo 未知)"
-    stamp="$(basename "${dir}" | sed -E 's/^upgrade-([0-9]{8})([0-9]{6}).*/\1 \2/' | sed -E 's/([0-9]{4})([0-9]{2})([0-9]{2}) ([0-9]{2})([0-9]{2})([0-9]{2})/\1-\2-\3 \4:\5:\6/')"
-    echo "  $((i+1))) 版本 v${ver}  备份于 ${stamp}  $(du -sh "${dir}" 2>/dev/null | cut -f1)"
-  done
-  local choice
-  choice="$(ask '选择要回滚到的备份（0=取消）' '0')"
-  [[ "${choice}" =~ ^[0-9]+$ ]] || die "无效选择"
-  [[ "${choice}" -ge 1 && "${choice}" -le ${#backups[@]} ]] || { log "已取消"; return; }
-  local target="${backups[$((choice-1))]}"
-  local targetVer; targetVer="$(cat "${target}/version.txt" 2>/dev/null || echo 未知)"
-
-  echo ""
-  warn "即将回滚：当前 v$(current_version) → v${targetVer}（备份 $(basename "${target}")）"
-  warn "程序产物将被还原；数据库默认【不】还原（避免丢失升级后产生的业务数据）"
-  local go
-  go="$(ask_yes_no '确认回滚程序产物？' 'n')"
-  [[ "${go}" == "y" ]] || { log "已取消"; return; }
-
-  # 回滚前对当前状态再做一份保护备份（防止误回滚无法恢复）
-  local safeguard="${DATA_ROOT}/backups/pre-rollback-$(date +%Y%m%d%H%M%S)-v$(current_version)"
-  local dist old
-  mkdir -p "${safeguard}"
-  [[ -f "${DATA_ROOT}/app/aid-admin.jar" ]] && cp "${DATA_ROOT}/app/aid-admin.jar" "${safeguard}/"
-  [[ -f "${DATA_ROOT}/app/build-info.json" ]] && cp "${DATA_ROOT}/app/build-info.json" "${safeguard}/"
-  for dist in admin-dist web-dist; do
-    [[ -d "${DATA_ROOT}/app/${dist}" ]] && cp -r "${DATA_ROOT}/app/${dist}" "${safeguard}/"
-  done
-  echo "$(current_version)" > "${safeguard}/version.txt"
-  ok "当前状态保护备份: ${safeguard}"
-  # 保护备份同样保留最近 3 份
-  ls -1d "${DATA_ROOT}/backups"/pre-rollback-* 2>/dev/null | sort | head -n -3 | while read -r old; do
-    rm -rf "${old}" && log "已清理过期保护备份: ${old}"
-  done
-
-  # 还原产物
-  do_stop || true
-  [[ -f "${target}/aid-admin.jar" ]] && install -m 0644 "${target}/aid-admin.jar" "${DATA_ROOT}/app/aid-admin.jar"
-  if [[ -f "${target}/build-info.json" ]]; then
-    install -m 0644 "${target}/build-info.json" "${DATA_ROOT}/app/build-info.json"
+run_version_updater() {
+  local mode="$1" binary="$2"
+  shift 2
+  if [[ "${mode}" == docker ]]; then
+    docker exec aid-updater "${binary}" -config "${UPDATER_CONFIG_FILE}" "$@"
   else
-    rm -f "${DATA_ROOT}/app/build-info.json"
+    "${binary}" -config "${UPDATER_CONFIG_FILE}" "$@"
   fi
-  for dist in admin-dist web-dist; do
-    if [[ -d "${target}/${dist}" ]]; then
-      rm -rf "${DATA_ROOT}/app/${dist}"
-      cp -r "${target}/${dist}" "${DATA_ROOT}/app/${dist}"
-    fi
-  done
-  ok "程序产物已还原到 v${targetVer}"
-
-  # 可选：还原数据库（高危，显式确认）
-  if [[ -f "${target}/db.sql.gz" ]]; then
-    local restoreDb
-    restoreDb="$(ask_yes_no '是否同时还原数据库？会丢失升级后产生的全部数据！' 'n')"
-    if [[ "${restoreDb}" == "y" ]]; then
-      log "还原数据库（升级前快照）..."
-      # docker 模式数据库容器需在运行态且健康后才能导入
-      ensure_mysql_ready || die "数据库容器未就绪，还原已中止"
-      restore_database "${target}/db.sql.gz" || die "数据库还原失败，请人工处理: ${target}/db.sql.gz"
-      ok "数据库已还原"
-    else
-      log "数据库保持现状（新版本增量为幂等加法结构，老版本代码可正常运行）"
-    fi
-  fi
-
-  do_restart
-  wait_backend_healthy || die "回滚后服务未就绪，请查看日志排查；保护备份: ${safeguard}"
-  state_set CURRENT_VERSION "${targetVer}"
-  ok "已回滚到 v${targetVer}"
-  print_access_info
 }
+
+do_rollback() (
+  require_root
+  local mode current updater listing choice id version created size
+  mode="$(detect_mode)"
+  [[ "${mode}" != none ]] || die "尚未部署"
+  ensure_no_active_version_task || return 1
+  begin_deployment_work
+  updater="${DATA_ROOT}/app/updater/aid-updater"
+  listing="$(run_version_updater "${mode}" "${updater}" -list-local-backups)" || die "无法读取本机备份"
+  [[ -n "${listing}" ]] || die "没有可恢复的本机版本备份"
+  local -a ids=() versions=()
+  while IFS=$'\t' read -r id version created size; do
+    printf '%s) %s  %s  %s 字节\n' "$((${#ids[@]} + 1))" "${version}" "${created}" "${size}"
+    ids+=("${id}")
+    versions+=("${version}")
+  done <<< "${listing}"
+  choice="$(ask '选择要恢复的备份（0=取消）' '0')"
+  [[ "${choice}" =~ ^[0-9]+$ && "${#choice}" -lt 4 ]] || die "无效选择"
+  (( 10#${choice} > 0 && 10#${choice} <= ${#ids[@]} )) || return 0
+  local index=$((10#${choice} - 1))
+  warn "将恢复 ${versions[index]} 的三端和数据库，当前版本会先完成备份校验"
+  [[ "$(ask_yes_no '确认恢复该备份？' 'n')" == y ]] || return 0
+  current="$(current_version)"
+  run_version_updater "${mode}" "${updater}" -restore-local-backup "${ids[index]}" \
+    -current-version "${current}" || die "回退未完成，请查看以上原因"
+  state_set CURRENT_VERSION "${versions[index]}"
+  print_access_info
+)
 
 # ----------------------------------------------------------------------------
 # 日常操作
@@ -9600,10 +9869,12 @@ do_config() {
 }
 
 # 安装/修复升级器（老环境补装、配置损坏修复、部署方式变更后重写配置）
-do_setup_updater() {
+do_setup_updater() (
   require_root
   local mode; mode="$(detect_mode)"
   [[ "${mode}" != "none" ]] || die "尚未部署，首次部署会自动安装升级器"
+  ensure_no_active_version_task || return 1
+  begin_deployment_work
   if [[ "${mode}" == "docker" ]]; then
     require_docker_runtime
     ensure_env_file
@@ -9624,7 +9895,7 @@ do_setup_updater() {
   setup_updater "${mode}" || die "升级器安装/修复失败，请查看上方诊断日志"
   install_management_command
   log "后台「项目升级配置 → 重新检测」即可看到升级器运行状态"
-}
+)
 
 do_backup() {
   require_root
@@ -9664,7 +9935,7 @@ show_menu() {
   echo "  1) 一键首次部署（Docker，源码构建，推荐）"
   echo "  2) 首次部署（手动 systemd，源码构建）"
   echo "  3) 自动检查并升级到当前渠道最新版（升级前完整备份）"
-  echo "  4) 回滚到升级前备份（最近 3 份可选）"
+  echo "  4) 选择本机备份并切换版本"
   echo "  5) 重启服务（配置变更后生效）"
   echo "  6) 停止服务"
   echo "  7) 查看状态"

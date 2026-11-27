@@ -7,18 +7,20 @@ import {
   BorderOutlined,
   DownloadOutlined,
   FolderOutlined,
+  OrderedListOutlined,
   PlayCircleOutlined,
   UngroupOutlined
 } from '@ant-design/icons'
 import { message } from 'antd'
-import { executeStudioGroupImages } from '@/hooks/studio/executeStudioGroupImages'
+import { useCanvasProjectRuntime } from '@/components/studio/free/CanvasProjectRuntimeContext'
+import { executeLegacyStudioGroupImages, executeStudioGroupImages, type StudioGroupImageExecution } from '@/hooks/studio/executeStudioGroupImages'
 import { useStudioUiStore } from '@/stores/studioUi'
 import { downloadMediaFileWithToast } from '@/utils/mediaFileDownload'
 import {
   STUDIO_GRID_STORYBOARD_MERGE_TOOLTIP,
   canMergeNodesToGridStoryboard
 } from '@/utils/studio/studioGroupStoryboardBridge'
-import { listGroupDownloadableMedia } from '@/utils/studio/studioGroupActions'
+import { isStudioNodeBatchExecutable, listGroupDownloadableMedia } from '@/utils/studio/studioGroupActions'
 import type { SelectionScreenRect, StudioArrangement } from '@/utils/studio/studioSelectionLayout'
 import { placeStudioSelectionToolbar } from '@/utils/studio/studioSelectionLayout'
 import { studioNodeMediaDownloadType } from '@/utils/studio/studioNodeMedia'
@@ -26,6 +28,7 @@ import { StudioCanvasDropdownPopover } from './StudioCanvasDropdownMenu'
 import { StudioCanvasToolbarButton } from './StudioCanvasToolbarButton'
 import { StudioCanvasTooltip } from './StudioCanvasTooltip'
 import { StudioGroupColorPicker } from './StudioGroupColorPicker'
+import { StudioGroupExecutionDialog } from './StudioGroupExecutionDialog'
 
 export interface StudioGroupToolbarHandle {
   reposition: (selectionRect: SelectionScreenRect, viewportRect: SelectionScreenRect) => void
@@ -37,9 +40,20 @@ function sameIdSet(a: string[], b: string[]): boolean {
   return b.every((id) => set.has(id))
 }
 
-export const StudioGroupToolbar = memo(forwardRef<StudioGroupToolbarHandle>(
-  function StudioGroupToolbar(_, ref) {
+type GroupExecution = {
+  scopeKey: string
+  groupId: string
+  groupTitle: string
+  rows: StudioGroupImageExecution[]
+  running: boolean
+}
+
+export const StudioGroupToolbar = memo(forwardRef<StudioGroupToolbarHandle, { visible: boolean }>(
+  function StudioGroupToolbar({ visible }, ref) {
     const elementRef = useRef<HTMLDivElement>(null)
+    const canvasRuntime = useCanvasProjectRuntime()
+    const scopeKey = useStudioUiStore((state) => state.scopeKey)
+    const studioMode = useStudioUiStore((state) => state.studioMode)
     const selectedNodeIds = useStudioUiStore((state) => state.selectedNodeIds)
     const nodes = useStudioUiStore((state) => state.nodes)
     const groups = useStudioUiStore((state) => state.groups)
@@ -51,10 +65,13 @@ export const StudioGroupToolbar = memo(forwardRef<StudioGroupToolbarHandle>(
     const [colorOpen, setColorOpen] = useState(false)
     const [arrangeOpen, setArrangeOpen] = useState(false)
     const [busy, setBusy] = useState(false)
+    const [execution, setExecution] = useState<GroupExecution | null>(null)
+    const [reportOpen, setReportOpen] = useState(false)
+    const activeExecution = useRef<GroupExecution | null>(null)
 
     const group = useMemo(
-      () => groups.find((item) => sameIdSet(item.childIds, selectedNodeIds)),
-      [groups, selectedNodeIds]
+      () => visible ? groups.find((item) => sameIdSet(item.childIds, selectedNodeIds)) : undefined,
+      [groups, selectedNodeIds, visible]
     )
     const childNodes = useMemo(() => {
       if (!group) return []
@@ -62,6 +79,17 @@ export const StudioGroupToolbar = memo(forwardRef<StudioGroupToolbarHandle>(
       return nodes.filter((node) => idSet.has(node.id))
     }, [group, nodes])
     const mergeCheck = useMemo(() => canMergeNodesToGridStoryboard(childNodes), [childNodes])
+    const executableNodes = useMemo(() => childNodes.filter(isStudioNodeBatchExecutable), [childNodes])
+    const report = execution?.scopeKey === scopeKey ? execution : null
+    const executeDisabledReason = !executableNodes.length
+      ? '分组内没有可生成的图片节点'
+      : studioMode === 'free' && !canvasRuntime
+        ? '画布生成尚未就绪，请稍后重试'
+        : canvasRuntime && (!canvasRuntime.canEdit || !canvasRuntime.canUseFeature('canvas.generate'))
+          ? '当前账号没有画布生成权限'
+          : canvasRuntime && !canvasRuntime.canMutate
+            ? '画布协作连接尚未就绪，请稍后重试'
+            : busy || report?.running ? '已有整组任务正在执行' : ''
 
     useImperativeHandle(ref, () => ({
       reposition(selectionRect, viewportRect) {
@@ -89,14 +117,40 @@ export const StudioGroupToolbar = memo(forwardRef<StudioGroupToolbarHandle>(
     )
 
     const executeGroup = useCallback(async () => {
-      if (!group || busy) return
-      setBusy(true)
-      try {
-        await executeStudioGroupImages(group.childIds)
-      } finally {
-        setBusy(false)
+      if (!group || executeDisabledReason || activeExecution.current?.scopeKey === scopeKey) return
+      if (!canvasRuntime) {
+        setBusy(true)
+        try {
+          await executeLegacyStudioGroupImages(group.childIds)
+        } finally {
+          setBusy(false)
+        }
+        return
       }
-    }, [busy, group])
+      const byId = new Map(executableNodes.map(node => [node.id, node]))
+      const rows: StudioGroupImageExecution[] = [...new Set(group.childIds)].flatMap(id => {
+        const node = byId.get(id)
+        return node ? [{ id, title: node.data.title?.trim() || '图片节点', status: 'pending' as const }] : []
+      })
+      const run = { scopeKey, groupId: group.id, groupTitle: group.title, rows, running: true }
+      activeExecution.current = run
+      setExecution(run)
+      setReportOpen(true)
+      try {
+        await executeStudioGroupImages({
+          scopeKey, groupId: group.id, nodes: rows, runtime: canvasRuntime,
+          onUpdate: (row) => {
+            if (activeExecution.current !== run) return
+            setExecution(current => current && { ...current, rows: current.rows.map(item => item.id === row.id ? row : item) })
+          }
+        })
+      } finally {
+        if (activeExecution.current === run) {
+          activeExecution.current = null
+          setExecution(current => current && { ...current, running: false })
+        }
+      }
+    }, [canvasRuntime, executableNodes, executeDisabledReason, group, scopeKey])
 
     const downloadGroup = useCallback(async () => {
       if (!group) return
@@ -121,12 +175,30 @@ export const StudioGroupToolbar = memo(forwardRef<StudioGroupToolbarHandle>(
       else message.info('没有可保存的媒体')
     }, [group, saveNodesToAssets])
 
-    if (!group) return null
+    const resultDialog = report ? (
+      <StudioGroupExecutionDialog
+        open={reportOpen}
+        groupTitle={report.groupTitle}
+        rows={report.rows}
+        running={report.running}
+        onClose={() => setReportOpen(false)}
+        onLocate={(nodeId) => {
+          if (!useStudioUiStore.getState().nodes.some(node => node.id === nodeId)) {
+            message.info('节点已删除')
+            return
+          }
+          setReportOpen(false)
+          useStudioUiStore.getState().selectNodes([nodeId])
+          window.dispatchEvent(new CustomEvent('studio:focus-node', { detail: { nodeId } }))
+        }}
+      />
+    ) : null
 
-    const color = group.colorTag ?? null
+    const color = group?.colorTag ?? null
 
     return (
-      <div
+      <>
+      {group ? <div
         ref={elementRef}
         className="studio-group-toolbar studio-canvas-glass-toolbar nodrag nowheel"
         role="toolbar"
@@ -188,13 +260,25 @@ export const StudioGroupToolbar = memo(forwardRef<StudioGroupToolbarHandle>(
 
         <span className="studio-canvas-glass-toolbar__divider" aria-hidden />
 
-        <StudioCanvasToolbarButton
-          showLabel
-          label="整组执行"
-          icon={<PlayCircleOutlined aria-hidden />}
-          disabled={busy}
-          onClick={() => { void executeGroup() }}
-        />
+        <StudioCanvasTooltip title={executeDisabledReason || undefined}>
+          <span>
+            <StudioCanvasToolbarButton
+              showLabel
+              label="整组执行"
+              icon={<PlayCircleOutlined aria-hidden />}
+              disabled={Boolean(executeDisabledReason)}
+              onClick={() => { void executeGroup() }}
+            />
+          </span>
+        </StudioCanvasTooltip>
+
+        {report?.groupId === group.id ? (
+          <StudioCanvasToolbarButton
+            label="查看整组执行结果"
+            icon={<OrderedListOutlined aria-hidden />}
+            onClick={() => setReportOpen(true)}
+          />
+        ) : null}
 
         <StudioCanvasToolbarButton
           showLabel
@@ -239,7 +323,9 @@ export const StudioGroupToolbar = memo(forwardRef<StudioGroupToolbarHandle>(
           icon={<DownloadOutlined aria-hidden />}
           onClick={() => { void downloadGroup() }}
         />
-      </div>
+      </div> : null}
+      {resultDialog}
+      </>
     )
   }
 ))

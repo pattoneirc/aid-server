@@ -15,6 +15,7 @@ resolveStoryboardGenConfigLlmFields,
 STORYBOARD_GEN_CONFIG_SCENE_CODES
 } from '~/utils/projectGenConfig'
 import { fetchUserStoryboardDetailOnce } from '~/utils/storyboardDetailOnce'
+import { placeStoryboardScriptImageBindings, storyboardBindingsToPromptAssets } from '~/utils/storyboardImageBindings'
 import {
 collectStoryboardPromptAssets,
 mergePromptAssets,
@@ -133,7 +134,7 @@ export function useStoryboardModalPromptCore(ctx: EditStoryboardImageModalCtx) {
     ticket = beginStoryboardPromptApply(Number(ctx.currentStoryboardId()))
   ): Promise<boolean> {
     if (!canApplyStoryboardPrompt(ticket)) return false
-    const text = String(plain || '').trim()
+    let text = String(plain || '').trim()
     if (!text) {
       if (!canApplyStoryboardPrompt(ticket)) return false
       ctx.resolvedPromptAssets.set([])
@@ -145,14 +146,26 @@ export function useStoryboardModalPromptCore(ctx: EditStoryboardImageModalCtx) {
     if (!canApplyStoryboardPrompt(ticket)) return false
     const saveCtx = await resolveStoryScriptSaveContext(ctx.store(), ctx.route())
     if (!canApplyStoryboardPrompt(ticket)) return false
-    const imageResolve = await resolveStoryboardImageAssetsFromPlain(text, saveCtx)
+    const detail = await fetchUserStoryboardDetailOnce(Number(ctx.currentStoryboardId()))
+    const explicit = detail.imagePromptReferences == null
+      ? placeStoryboardScriptImageBindings(text, detail.scriptImageReferences ?? [])
+      : { prompt: text, bindings: detail.imagePromptReferences }
+    text = explicit.prompt
+    const boundIndices = new Set(explicit.bindings.map((ref) => ref.index))
+    const legacyPrompt = text.replace(/@图片(\d+)\[[^\]]+\]/g, (token, index) =>
+      boundIndices.has(Number(index)) ? '' : token
+    )
+    const imageResolve = await resolveStoryboardImageAssetsFromPlain(legacyPrompt, saveCtx)
     if (!canApplyStoryboardPrompt(ticket)) return false
 
     ctx.storyboardPromptProgrammaticSyncDepth.set(
       ctx.storyboardPromptProgrammaticSyncDepth.get() + 1
     )
     try {
-      ctx.resolvedPromptAssets.set(imageResolve.resolvedAssets)
+      ctx.resolvedPromptAssets.set([
+        ...storyboardBindingsToPromptAssets(explicit.bindings),
+        ...imageResolve.resolvedAssets
+      ])
       if (imageResolve.unresolvedNames.length) {
         message.warning(`部分参考图未匹配：${imageResolve.unresolvedNames.join('、')}`)
       }

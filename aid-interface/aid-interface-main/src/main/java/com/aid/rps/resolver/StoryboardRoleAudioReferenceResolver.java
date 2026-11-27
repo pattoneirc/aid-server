@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 
 import com.aid.aid.domain.AidRolePropScene;
 import com.aid.aid.domain.AidRoleVoiceBinding;
+import com.aid.asset.audio.service.impl.PersonalVoiceAssetService;
 import com.aid.aid.service.IAidRolePropSceneService;
 import com.aid.aid.service.IAidRoleVoiceBindingService;
 import com.aid.rps.resolver.StoryboardAudioReferenceResolver.DialogueSegment;
@@ -60,6 +61,9 @@ public class StoryboardRoleAudioReferenceResolver
 
     @Autowired
     private StoryboardAudioReferenceResolver dialogueResolver;
+
+    @Autowired
+    private PersonalVoiceAssetService personalVoiceAssets;
 
     /**
      * 加载项目内具有启用音色绑定的角色级参考音频名称。
@@ -112,6 +116,7 @@ public class StoryboardRoleAudioReferenceResolver
                         .select(AidRoleVoiceBinding::getId,
                                 AidRoleVoiceBinding::getAssetId,
                                 AidRoleVoiceBinding::getEpisodeId,
+                                AidRoleVoiceBinding::getPersonalAudioAssetId,
                                 AidRoleVoiceBinding::getSampleUrl,
                                 AidRoleVoiceBinding::getReferenceAudioUrl)
                         .in(AidRoleVoiceBinding::getAssetId, assetIds)
@@ -137,6 +142,9 @@ public class StoryboardRoleAudioReferenceResolver
             return Collections.emptyList();
         }
         Map<Long, AidRoleVoiceBinding> bindingByAssetId = chooseEffectiveBindings(bindings, episodeId);
+        List<Long> personalIds = bindingByAssetId.values().stream().map(AidRoleVoiceBinding::getPersonalAudioAssetId)
+                .filter(Objects::nonNull).distinct().toList();
+        Set<Long> usablePersonalIds = personalIds.isEmpty() ? Set.of() : personalVoiceAssets.findOwned(personalIds, userId).keySet();
         List<String> result = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         for (AidRolePropScene character : characters)
@@ -146,6 +154,8 @@ public class StoryboardRoleAudioReferenceResolver
             {
                 continue;
             }
+            Long personalId = bindingByAssetId.get(character.getId()).getPersonalAudioAssetId();
+            if (personalId != null && !usablePersonalIds.contains(personalId)) continue;
             String referenceName = AUDIO_NAME_PREFIX + character.getName().trim();
             if (seen.add(referenceName))
             {
@@ -295,6 +305,10 @@ public class StoryboardRoleAudioReferenceResolver
         return reconcilePromptAudioReferences(prompt, speakerReferences);
     }
 
+    public String alignPromptToOrderedRoleReferences(String prompt, List<String> orderedReferenceNames) {
+        return StrUtil.isBlank(prompt) ? prompt : reconcilePromptAudioReferences(prompt, orderedReferenceNames);
+    }
+
     /** 出片前校验并修复库存提示词音频占位。 */
     public String normalizeStoredVideoPrompt(String prompt, String dialogueText)
     {
@@ -426,7 +440,7 @@ public class StoryboardRoleAudioReferenceResolver
         for (AidRoleVoiceBinding candidate : bindings)
         {
             if (Objects.isNull(candidate) || Objects.isNull(candidate.getAssetId())
-                    || (StrUtil.isBlank(candidate.getReferenceAudioUrl())
+                    || (candidate.getPersonalAudioAssetId() == null && StrUtil.isBlank(candidate.getReferenceAudioUrl())
                             && StrUtil.isBlank(candidate.getSampleUrl())))
             {
                 continue;

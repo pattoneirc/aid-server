@@ -59,8 +59,10 @@ import {
   getOfficialAssetsStatus,
   getUpdaterLogs,
   getUpgradeSource,
+  getVersionBackups,
   rollbackDeploymentConfig,
   rollbackSystem,
+  saveVersionBackupSettings,
   saveUpgradeSource,
   startUpdaterUpgrade,
   startUpgrade,
@@ -70,7 +72,8 @@ import {
   validateDeploymentConfig,
   UpdaterLog,
   OfficialAssetsStatus,
-  UpgradeSourceSetting
+  UpgradeSourceSetting,
+  VersionBackupSettings
 } from '@/api/aidconfig/upgrade';
 import { useUpgradeStore } from '@/store/useUpgradeStore';
 import PageHeader from '@/components/PageHeader';
@@ -291,6 +294,11 @@ export default function UpgradeConfigPage() {
   const [assetsUploadProgress, setAssetsUploadProgress] = useState(0);
   const [assetsFile, setAssetsFile] = useState<File | null>(null);
   const [rollbackVersion, setRollbackVersion] = useState<string>();
+  const [versionBackups, setVersionBackups] = useState<Partial<VersionBackupSettings>>({});
+  const [backupDir, setBackupDir] = useState('');
+  const [backupKeep, setBackupKeep] = useState(1);
+  const [backupSaving, setBackupSaving] = useState(false);
+  const backupEdited = useRef(false);
   const [rollbackConfirmOpen, setRollbackConfirmOpen] = useState(false);
   const [rollbackConfirmText, setRollbackConfirmText] = useState('');
   const [rollbackSubmitting, setRollbackSubmitting] = useState(false);
@@ -328,8 +336,22 @@ export default function UpgradeConfigPage() {
   const configProtocolReady = updater?.ready === true && (updater.protocolVersion || 0) >= 3;
   const configProtocolIncompatible = updater?.status === 'INCOMPATIBLE' || Boolean(updater && (updater.protocolVersion || 0) < 3);
   const updaterTag = UPDATER_TAG[updater?.status || 'UNKNOWN'] || UPDATER_TAG.UNKNOWN;
-  const rollbackCount = status?.rollbackReleases?.length || 0;
+  const releaseRollbackCount = status?.rollbackReleases?.length || 0;
+  const rollbackCount = releaseRollbackCount + (versionBackups.backups?.length || 0);
   const lastTask = updater?.lastTask;
+  useEffect(() => {
+    if (taskPolling || lastTask?.state === 'RUNNING') return;
+    let current = true;
+    getVersionBackups().then(({ data }) => {
+      if (!current) return;
+      setVersionBackups(data || {});
+      if (!backupEdited.current) {
+        setBackupDir(data?.directory || '');
+        setBackupKeep(data?.keep || 1);
+      }
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [lastTask?.state, lastTask?.taskId, taskPolling]);
   const lastTaskMeta = lastTask?.state ? TASK_STATE_META[lastTask.state] : undefined;
   const taskRunning = lastTask?.state === 'RUNNING';
   const canCancelVersionTask = Boolean(
@@ -348,7 +370,10 @@ export default function UpgradeConfigPage() {
   // 历史完成任务不在每次进入页面时占据首屏；本次会话发起或仍在运行的版本任务才展示终端。
   const showProgressTerminal =
     isVersionTask && (taskRunning || Boolean(pendingTaskAction)) && dismissedTaskId !== progressTaskId;
-  const selectedRollback = status?.rollbackReleases?.find((item) => item.version === rollbackVersion);
+  const selectedLocalBackup = versionBackups.backups?.find((item) => item.id === rollbackVersion);
+  const selectedRollback = selectedLocalBackup
+    ? { version: selectedLocalBackup.version, databaseCompatible: false, databaseRollback: undefined }
+    : status?.rollbackReleases?.find((item) => item.version === rollbackVersion);
   const mqActive = rocketmqEnabled && (
     deploymentConfig?.mode === 'docker'
       ? usesInternalRocketmq || Boolean(rocketmqNameserver.trim())
@@ -378,7 +403,6 @@ export default function UpgradeConfigPage() {
       const res = await getUpgradeSource();
       sourceForm.setFieldsValue({
         releaseChannel: 'stable',
-        keepBackups: 3,
         manifestUrl: '',
         ...(res.data || {})
       });
@@ -530,8 +554,8 @@ export default function UpgradeConfigPage() {
     }
   }, [lastTask?.action, lastTask?.state, taskPolling]);
 
-  const beginTaskPolling = useCallback((action: string) => {
-    pollingBaseline.current = taskKey(useUpgradeStore.getState().status?.updater?.lastTask);
+  const beginTaskPolling = useCallback((action: string, baseline?: string) => {
+    pollingBaseline.current = baseline ?? taskKey(useUpgradeStore.getState().status?.updater?.lastTask);
     pollingTaskSeen.current = false;
     setPendingTaskAction(action);
     setDismissedTaskId(undefined);
@@ -571,7 +595,6 @@ export default function UpgradeConfigPage() {
     try {
       await saveUpgradeSource({
         releaseChannel: values.releaseChannel,
-        keepBackups: values.keepBackups,
         manifestUrl: values.manifestUrl?.trim() ?? ''
       });
       setSourceDirty(false);
@@ -817,7 +840,7 @@ export default function UpgradeConfigPage() {
     }
     setRollbackSubmitting(true);
     try {
-      const res: any = await rollbackSystem(selectedRollback.version);
+      const res: any = await rollbackSystem(selectedRollback.version, selectedLocalBackup?.id);
       message.success(res?.msg || '回退任务已受理');
       setRollbackConfirmOpen(false);
       setRollbackConfirmText('');
@@ -1137,10 +1160,62 @@ export default function UpgradeConfigPage() {
 
   const rollbackPanel = (
     <div className="upgrade-page__tab-panel">
+      {versionBackups.directory && (
+        <>
+          <Form layout="vertical" onFinish={async () => {
+            const baseline = taskKey(useUpgradeStore.getState().status?.updater?.lastTask);
+            setBackupSaving(true);
+            try {
+              const res = await saveVersionBackupSettings(backupDir.trim(), backupKeep);
+              backupEdited.current = false;
+              message.success(res.msg || '已提交备份设置校验');
+              beginTaskPolling('BACKUP_SETTINGS', baseline);
+            } finally {
+              setBackupSaving(false);
+            }
+          }}>
+            <Form.Item label="本机备份目录" extra="使用服务器上已存在的绝对路径。Docker 需要升级器能读写对应的宿主机挂载。">
+              <Input value={backupDir} disabled={backupSaving || taskBusy} onChange={(event) => {
+                backupEdited.current = true;
+                setBackupDir(event.target.value);
+              }} />
+            </Form.Item>
+            <Space align="end">
+              <Form.Item label="备份保留份数">
+                <InputNumber value={backupKeep} min={1} max={50} precision={0} disabled={backupSaving || taskBusy} onChange={(value) => {
+                  backupEdited.current = true;
+                  setBackupKeep(value || 1);
+                }} />
+              </Form.Item>
+              <Form.Item>
+                <Button htmlType="submit" loading={backupSaving} disabled={!updater?.ready || taskBusy || !backupDir.trim()}>
+                  校验并保存
+                </Button>
+              </Form.Item>
+            </Space>
+          </Form>
+          <Text strong>本机版本备份</Text>
+          <Radio.Group value={rollbackVersion} onChange={(event) => setRollbackVersion(event.target.value)} className="upgrade-page__rollback-list">
+            <Space direction="vertical" size={8}>
+              {versionBackups.backups?.map((backup) => (
+                <Radio key={backup.id} value={backup.id}>
+                  <Space wrap>
+                    <Text strong>v{backup.version}</Text>
+                    <Text type="secondary">{backup.createdAt}</Text>
+                    <Text type="secondary">{formatBytes(backup.sizeBytes)}</Text>
+                    <Text type="secondary">{backup.path}</Text>
+                  </Space>
+                </Radio>
+              ))}
+              {!versionBackups.backups?.length && <Text type="secondary">尚无可恢复的本机版本备份</Text>}
+            </Space>
+          </Radio.Group>
+        </>
+      )}
       <div className="upgrade-page__section-toolbar">
         <div>
           <Text strong>可回退版本</Text>
-          <Text type="secondary"> · 执行前会自动备份程序、配置和数据库</Text>
+          <Text type="secondary"> · 执行前校验或备份当前三端和数据库</Text>
         </div>
         {rollbackCount > 0 && (
           <Button
@@ -1157,7 +1232,7 @@ export default function UpgradeConfigPage() {
         )}
       </div>
 
-      {rollbackCount > 0 ? (
+      {releaseRollbackCount > 0 ? (
         <Radio.Group
           value={rollbackVersion}
           onChange={(event) => setRollbackVersion(event.target.value)}
@@ -1178,12 +1253,12 @@ export default function UpgradeConfigPage() {
             ))}
           </Space>
         </Radio.Group>
-      ) : (
+      ) : rollbackCount === 0 ? (
         <div className="upgrade-page__empty">
           <HistoryOutlined />
           <span>当前没有可回退版本</span>
         </div>
-      )}
+      ) : null}
     </div>
   );
 
@@ -1246,16 +1321,6 @@ export default function UpgradeConfigPage() {
                     <Radio value="all">正式版 + 测试版</Radio>
                   </Space>
                 </Radio.Group>
-              </Form.Item>
-            </Col>
-            <Col xs={24} lg={10}>
-              <Form.Item
-                name="keepBackups"
-                label="备份保留份数"
-                rules={[{ required: true, message: '请输入备份保留份数' }]}
-                extra="每次升级或回退前自动备份，超出后优先清理最旧备份。"
-              >
-                <InputNumber min={1} max={50} precision={0} style={{ width: 180 }} />
               </Form.Item>
             </Col>
           </Row>
@@ -2428,13 +2493,15 @@ export default function UpgradeConfigPage() {
           type="warning"
           showIcon
           message="回退会短暂停止服务"
-          description="升级器会先备份程序、配置和数据库，再校验并安装目标制品。"
+          description="升级器先校验或备份当前三端和数据库，再切换到目标版本。"
           className="upgrade-page__modal-alert"
         />
         <Descriptions size="small" column={1}>
           <Descriptions.Item label="目标版本">v{selectedRollback?.version || '-'}</Descriptions.Item>
           <Descriptions.Item label="数据库">
-            {selectedRollback?.databaseCompatible
+            {selectedLocalBackup
+              ? '恢复到所选备份的数据库时间点'
+              : selectedRollback?.databaseCompatible
               ? '兼容当前结构'
               : `需要回退脚本 ${selectedRollback?.databaseRollback || '（未提供）'}`}
           </Descriptions.Item>

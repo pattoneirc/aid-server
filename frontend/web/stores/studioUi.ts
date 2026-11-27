@@ -79,7 +79,7 @@ import {
 } from '@/utils/studio/studioNodeLod'
 import { studioVideoAudioToolDefinition } from '@/utils/studio/studioVideoAudioTool'
 import { tidyStudioCanvasNodes } from '@/utils/studio/studioCanvasTidy'
-import { canConnectStudioNodes, studioManualConnectionDisabledReason } from '@/utils/studio/studioLibraryLink'
+import { canConnectStudioNodes, studioConnectedVideoDisabledReason, studioManualNodeConnectionDisabledReason } from '@/utils/studio/studioLibraryLink'
 import { removeStudioVideoReference, upsertComposerRef } from '@/utils/studio/studioComposerRefs'
 import { applyStudioConnectionReference, clearStudioConnectionReference } from '@/utils/studio/studioConnectionReference'
 import { createEmptyTouchEditSession } from '@/utils/studio/touchEditSessionModel'
@@ -204,7 +204,7 @@ interface StudioUiState {
     operation: StudioVideoAudioTool
   ) => { videoNodeId: string; audioNodeId: string } | null
   addConnection: (connection: Connection, kind?: StudioEdgeKind) => void
-  addUserConnection: (connection: Connection, kind?: StudioEdgeKind) => void
+  addUserConnection: (connection: Connection, kind?: StudioEdgeKind) => string | undefined
   applyNodeChanges: (changes: NodeChange<StudioCanvasNode>[]) => void
   commitNodePositions: (positions: Array<{ id: string; position: XYPosition }>) => void
   applyEdgeChanges: (changes: EdgeChange<StudioFlowEdge>[]) => void
@@ -647,9 +647,10 @@ export const useStudioUiStore = create<StudioUiState>((set, get) => guardStudioR
     if (state.studioMode !== 'free') return null
     const neighbor = connection && state.nodes.find(node => node.id === connection.nodeId)
     if (connection) {
+      const endpoint = { data: { kind } }
       if (!neighbor || (connection.role === 'source'
-        ? studioManualConnectionDisabledReason(neighbor.data.kind, kind, state.studioMode)
-        : studioManualConnectionDisabledReason(kind, neighbor.data.kind, state.studioMode))) return null
+        ? studioManualNodeConnectionDisabledReason(neighbor, endpoint, state)
+        : studioManualNodeConnectionDisabledReason(endpoint, neighbor, state))) return null
     }
     const anchor = neighbor ?? (position == null
       ? state.nodes.find(node => node.id === state.activeNodeId) ?? state.nodes.at(-1)
@@ -868,7 +869,9 @@ export const useStudioUiStore = create<StudioUiState>((set, get) => guardStudioR
     const state = get()
     const source = state.nodes.find(node => node.id === connection.source)
     const target = state.nodes.find(node => node.id === connection.target)
-    if (!source || !target || studioManualConnectionDisabledReason(source.data.kind, target.data.kind, state.studioMode)) return
+    if (!source || !target) return
+    const reason = studioManualNodeConnectionDisabledReason(source, target, state)
+    if (reason) return reason
     get().addConnection(connection, kind)
   },
 
@@ -1766,7 +1769,8 @@ export const useStudioUiStore = create<StudioUiState>((set, get) => guardStudioR
     if (!picker) return false
     const target = state.nodes.find((node) => node.id === picker.targetNodeId)
     const source = state.nodes.find((node) => node.id === sourceNodeId)
-    if (!target || !source || studioReferencePickDisabledReason(target, source)) return false
+    if (!target || !source || studioReferencePickDisabledReason(target, source)
+      || studioConnectedVideoDisabledReason(source, target, state)) return false
 
     if (target.data.kind === 'frame_breakdown') {
       const applied = get().setFrameBreakdownSource(target.id, {

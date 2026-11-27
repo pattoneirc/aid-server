@@ -2,8 +2,8 @@ import { providerCategoryLabel } from './providerCategory';
 import React from 'react';
 import ModelMigrationModal from './ModelMigrationModal';
 import ModelMigrationHistory from './ModelMigrationHistory';
-import { Avatar, Badge, Button, Input, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
-import { DeleteOutlined, DisconnectOutlined, EditOutlined, GlobalOutlined, LinkOutlined, PlusOutlined, SyncOutlined, ClearOutlined, ExperimentOutlined, SearchOutlined } from '@ant-design/icons';
+import { Avatar, Button, Input, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
+import { DeleteOutlined, DisconnectOutlined, EditOutlined, GlobalOutlined, LinkOutlined, PlusOutlined, ExperimentOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ModelPoolBindingSnapshot } from '@/api/aid/aimanage';
 import type { Model, Provider } from './types';
 import { MODEL_TYPE_OPTIONS, GENERATE_MODE_OPTIONS, INPUT_REQUIREMENT_OPTIONS, getLabelByValue, getAntdTagColor } from '@/utils/enums';
@@ -24,8 +24,6 @@ interface Props {
   onDelete: (row: Model) => void;
   /** 行内开关：直接启用或停用模型，无需进入编辑弹窗 */
   onToggleStatus: (row: Model, enabled: boolean) => Promise<void>;
-  onSyncVoice?: () => void;
-  onCleanExpired?: () => void;
   /** 打开真实模型总览抽屉 */
   onOpenOverview?: () => void;
   poolSnapshot: ModelPoolBindingSnapshot;
@@ -35,7 +33,7 @@ interface Props {
   onOpenPoolBinding: (mode: 'bind' | 'unbind') => void;
 }
 
-export default function ModelTable({ provider, list, loading, query, onQueryChange, onAdd, onEdit, onDelete, onToggleStatus, onSyncVoice, onCleanExpired, onOpenOverview, poolSnapshot, poolSnapshotReady, selectedModelIds, onSelectionChange, onOpenPoolBinding }: Props) {
+export default function ModelTable({ provider, list, loading, query, onQueryChange, onAdd, onEdit, onDelete, onToggleStatus, onOpenOverview, poolSnapshot, poolSnapshotReady, selectedModelIds, onSelectionChange, onOpenPoolBinding }: Props) {
   const [migrationOpen, setMigrationOpen] = React.useState(false);
   const [migrationHistoryOpen, setMigrationHistoryOpen] = React.useState(false);
   const [testingId, setTestingId] = React.useState<number | null>(null);
@@ -204,18 +202,6 @@ export default function ModelTable({ provider, list, loading, query, onQueryChan
               </Button>
               </Tooltip>
             </>
-          )}
-          {provider.providerCode?.trim().toLowerCase() === 'minimax' && onCleanExpired && (
-            <Button size="small" icon={<ClearOutlined />} danger onClick={onCleanExpired}>
-              清除过期
-            </Button>
-          )}
-          {provider.providerCode?.trim().toLowerCase() === 'minimax' && onSyncVoice && (
-            <Badge count="推荐" size="small">
-              <Button size="small" icon={<SyncOutlined />} onClick={onSyncVoice}>
-                同步音色
-              </Button>
-            </Badge>
           )}
         </Space>
       </div>

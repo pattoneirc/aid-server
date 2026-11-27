@@ -22,8 +22,7 @@ public final class BillingRouteDimensions {
             default -> "UNKNOWN";
         };
         if ("AUDIO".equals(type) && "tokendance".equalsIgnoreCase(model.getProviderCode())) {
-            if ("tokendance:minimax:voice_clone".equals(model.getProtocol())) operation = "REGISTER_CLONE";
-            else if ("tokendance:openai:chat-completions".equals(model.getProtocol())) {
+            if ("tokendance:openai:chat-completions".equals(model.getProtocol())) {
                 if ("mimo-v2.5-tts-voiceclone".equals(model.getRealModelCode())) operation = "REFERENCE_CLONE";
                 else if ("mimo-v2.5-tts-voicedesign".equals(model.getRealModelCode())) operation = "DESIGN";
             }

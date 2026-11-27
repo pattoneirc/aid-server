@@ -79,15 +79,16 @@ export function useSceneModalGenerate(ctx: EditSceneImageModalCtx): SceneModalGe
     ctx.beginCanvasTaskOverlay(sceneIdx, imgIdx, '生图任务提交中...', 'dialogue')
 
     let submittedTaskId: number | null = null
+    const settings = ctx.resolveDialogueOutputSettings()
     const submitPayload = buildSceneModalGenerateRequest({
       formId,
       genMode: 'chat',
       referenceImages: refUrls.length > 0 ? refUrls : undefined,
       prompt: instructionText,
       modelCode,
-      aspectRatio: ctx.dialogueSettings.get().aspectRatio || '1:1',
-      size: ctx.dialogueSettings.get().quality?.toUpperCase() || '2K',
-      imageCount: ctx.dialogueSettings.get().count || 1
+      aspectRatio: settings.aspectRatio || '1:1',
+      size: settings.quality.toUpperCase() || '2K',
+      imageCount: settings.count || 1
     })
     const result = await runEditImageTask({
       ...submitPayload,

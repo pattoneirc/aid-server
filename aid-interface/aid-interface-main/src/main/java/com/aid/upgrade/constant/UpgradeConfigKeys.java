@@ -60,7 +60,7 @@ public final class UpgradeConfigKeys {
     public static final String KEY_KEEP_BACKUPS = "keep_backups";
 
     /** 备份保留份数默认值 */
-    public static final int DEFAULT_KEEP_BACKUPS = 3;
+    public static final int DEFAULT_KEEP_BACKUPS = 1;
 
     /** 备份保留份数下限 */
     public static final int MIN_KEEP_BACKUPS = 1;

@@ -56,6 +56,7 @@ public class RoleVoiceBindingController extends BaseController
         s.add("音色已下架");
         // 参考音频归属 / 可用性
         s.add("音频不存在");
+        s.add("请选择一种音色");
         // 覆盖参数
         s.add("语速越界");
         s.add("音调越界");

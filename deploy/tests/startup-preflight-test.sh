@@ -83,6 +83,11 @@ validate_https_runtime() { trace validate-https; }
 wait_backend_healthy() { trace backend-http; }
 stop_failed_docker_service() { trace "stop:$1"; }
 docker_container_diagnostics() { trace "diagnostics:$1"; }
+MOCK_GATEWAY_FAILURE=no
+verify_docker_gateway() {
+  trace "gateway:$1:$2"
+  [[ "$MOCK_GATEWAY_FAILURE" != yes ]]
+}
 
 reset_trace
 MOCK_FAIL_CONTAINER=""
@@ -91,7 +96,17 @@ wait_docker_container_healthy() {
   [[ "$1" != "${MOCK_FAIL_CONTAINER}" ]]
 }
 start_docker_application_stack
-assert_trace $'validate-https\ncompose:up -d aid-server\ncompose:restart aid-server\nhealthy:aid-server\nbackend-http\ncompose:up -d aid-web\ncompose:restart aid-web\nhealthy:aid-web\ncompose:up -d nginx\ncompose:restart nginx\nhealthy:aid-nginx\ncompose:up -d aid-updater\ncompose:restart aid-updater\nhealthy:aid-updater'
+assert_trace $'validate-https\ncompose:up -d aid-server\ncompose:restart aid-server\nhealthy:aid-server\nbackend-http\ncompose:up -d aid-web\ncompose:restart aid-web\nhealthy:aid-web\ncompose:up -d nginx\ncompose:restart nginx\nhealthy:aid-nginx\ngateway:aid-nginx:http\ncompose:up -d aid-updater\ncompose:restart aid-updater\nhealthy:aid-updater'
+
+# 自身健康但代理失败时，网关验收中止，升级器不会启动。
+reset_trace
+MOCK_GATEWAY_FAILURE=yes
+if start_docker_application_stack; then
+  echo 'FAIL: gateway upstream failure must abort the staged startup' >&2
+  exit 1
+fi
+MOCK_GATEWAY_FAILURE=no
+assert_trace $'validate-https\ncompose:up -d aid-server\ncompose:restart aid-server\nhealthy:aid-server\nbackend-http\ncompose:up -d aid-web\ncompose:restart aid-web\nhealthy:aid-web\ncompose:up -d nginx\ncompose:restart nginx\nhealthy:aid-nginx\ngateway:aid-nginx:http\ndiagnostics:aid-nginx\nstop:aid-nginx'
 
 # 后端失败时必须停止循环重启，且不能继续启动 Web/Nginx。
 reset_trace

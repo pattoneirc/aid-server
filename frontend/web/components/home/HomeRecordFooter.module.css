@@ -1,0 +1,19 @@
+.footer {
+  padding: 16px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  color: var(--home-text-2, inherit);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.footer a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.footer a:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}

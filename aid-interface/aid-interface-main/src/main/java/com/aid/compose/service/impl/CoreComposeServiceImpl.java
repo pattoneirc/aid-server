@@ -25,6 +25,7 @@ import com.aid.compose.domain.ComposeBillingSnapshot;
 import com.aid.compose.domain.ComposeCommand;
 import com.aid.compose.domain.ComposeFileInfo;
 import com.aid.compose.domain.ComposeGroup;
+import com.aid.compose.domain.ComposeFrameSize;
 import com.aid.compose.domain.ComposeJobPlan;
 import com.aid.compose.domain.ComposeStorageSnapshot;
 import com.aid.compose.domain.ComposeSubmitResult;
@@ -887,7 +888,8 @@ public class CoreComposeServiceImpl implements CoreComposeService {
      */
     private Map<String, Object> assembleEditMediaRequest(ComposeCommand command, ComposeTracks tracks,
                                                          String resolution, Long taskId,
-                                                         MpsProperties props, OssProperties storage) {
+                                                         MpsProperties props, OssProperties storage,
+                                                         ComposeFrameSize frame) {
         Map<String, Object> request = new LinkedHashMap<>();
 
         // 当前 COS 自有素材使用原生 Bucket/Region/Object，外部合法链接保留 URL 输入。
@@ -935,6 +937,9 @@ public class CoreComposeServiceImpl implements CoreComposeService {
         composeConfig.put("Tracks", mpsTracks);
         composeConfig.put("Styles", buildSubtitleStyles(tracks.getSubtitleItems(), props));
         composeConfig.put("TargetInfo", buildTargetInfo());
+        if (frame != null) {
+            composeConfig.put("Canvas", Map.of("Width", frame.width(), "Height", frame.height()));
+        }
         request.put("ComposeConfig", composeConfig);
 
         // OutputStorage（COS）
@@ -995,6 +1000,11 @@ public class CoreComposeServiceImpl implements CoreComposeService {
         ComposeJobPlan plan = new ComposeJobPlan();
         plan.setTaskId(taskId);
         plan.setResolution(resolution);
+        ComposeFrameSize frame = ComposeFrameSize.resolve(resolution, command.getAspectRatio());
+        if (frame != null) {
+            plan.setOutputWidth(frame.width());
+            plan.setOutputHeight(frame.height());
+        }
         plan.setCodec(media.getCodec());
         plan.setOutputObjectPath(dir + "compose_" + taskId + ".mp4");
         plan.setTracks(tracks);
@@ -1009,7 +1019,7 @@ public class CoreComposeServiceImpl implements CoreComposeService {
         }
         if (MpsConfigManager.MODE_TENCENT_MPS.equals(media.getProcessMode())) {
             request.put("editMediaRequest", assembleEditMediaRequest(
-                    command, tracks, resolution, taskId, media, storage));
+                    command, tracks, resolution, taskId, media, storage, frame));
         }
         return request;
     }

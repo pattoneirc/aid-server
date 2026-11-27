@@ -80,11 +80,9 @@ import com.aid.enums.CreationStepEnum;
 import com.aid.enums.EpisodeStatusEnum;
 import com.aid.enums.GenTypeEnum;
 import com.aid.enums.ProjectStatusEnum;
-import com.aid.media.constants.MinimaxTtsConstants;
 import com.aid.media.dto.MediaAudioGenerateRequest;
 import com.aid.media.enums.MediaTaskStatus;
 import com.aid.media.event.MediaTaskOssPersistedEvent;
-import com.aid.media.provider.MinimaxProviderDetector;
 import com.aid.media.service.IMediaGenerationService;
 import com.aid.rps.queue.BatchParentSubmissionGuard;
 import com.aid.rps.queue.BatchTaskSlotReservation;
@@ -188,9 +186,6 @@ public class VideoComposeServiceImpl implements VideoComposeService {
 
     /** 创作步骤校验：一键配音与单分镜、批量配音统一要求步骤6已解锁。 */
     private final ICreationStepService creationStepService;
-
-    /** MiniMax 模型归属判定：用于受理前执行同步接口文本上限校验。 */
-    private final MinimaxProviderDetector minimaxProviderDetector;
 
     /** 核心合成方法 */
     private final CoreComposeService coreComposeService;
@@ -685,7 +680,9 @@ public class VideoComposeServiceImpl implements VideoComposeService {
         // 素材指纹：分组素材（视频/配音URL与时长、字幕、BGM、分辨率）归一化后哈希。
         // 上次导出成功且指纹一致 → 素材未变（没重新出片/重新配音/改字幕），直接复用成片，不再合成不再扣费。
         // 最新成片可能在待审槽（已过审内容重新导出的产物），复用优先返回待审新片
-        String fingerprint = computeExportFingerprint(request);
+        AidComicProject project = aidComicProjectService.getById(editor.getProjectId());
+        String aspectRatio = project == null ? null : StrUtil.trimToNull(project.getAspectRatio());
+        String fingerprint = computeExportFingerprint(request, aspectRatio);
         String latestVideoUrl = StrUtil.isNotBlank(editor.getPendingVideoUrl())
                 ? editor.getPendingVideoUrl() : editor.getFinalVideoUrl();
         if (!Boolean.TRUE.equals(request.getForceRecompose())
@@ -717,7 +714,7 @@ public class VideoComposeServiceImpl implements VideoComposeService {
             if (!exportStarted) {
                 composeBatchSlotCoordinator.bindExport(editor.getId(), exportReservation);
             }
-            command = buildExportCommand(request, editor, userId);
+            command = buildExportCommand(request, editor, userId, aspectRatio);
             String activeRunToken = exportRunToken;
             submitResult = batchParentSubmissionGuard.execute(exportSubmissionScope(editor.getId()), () ->
             {
@@ -976,11 +973,14 @@ public class VideoComposeServiceImpl implements VideoComposeService {
      * @param request 导出入参
      * @return SHA-256 十六进制指纹（64字符）
      */
-    private String computeExportFingerprint(EpisodeExportRequest request) {
+    private String computeExportFingerprint(EpisodeExportRequest request, String aspectRatio) {
         StringBuilder raw = new StringBuilder("compose");
         raw.append("|SL:").append(SUBTITLE_LAYOUT_FINGERPRINT);
         raw.append("|R:").append(StrUtil.isBlank(request.getResolution())
                 ? "FHD" : request.getResolution().trim().toUpperCase());
+        if (StrUtil.isNotBlank(aspectRatio)) {
+            raw.append("|AR:").append(aspectRatio);
+        }
         raw.append("|GB:").append(normalizeFingerprintUrl(request.getGlobalBgmUrl()));
         for (ComposeGroupDto group : request.getGroups()) {
             raw.append("|G|SID:").append(group.getStoryboardId());
@@ -1998,14 +1998,6 @@ public class VideoComposeServiceImpl implements VideoComposeService {
                     voice.modelConfig.getModelCode(), textLength, MAX_VOICEOVER_TEXT_LENGTH);
             throw TaskErrorPresentation.fromCode(TaskErrorCode.USER_INPUT_TOO_LONG, "文本过长，请精简");
         }
-        if (minimaxProviderDetector.isMinimax(voice.modelConfig.getProviderCode(),
-                MinimaxProviderDetector.parseCapabilityProvider(voice.modelConfig.getCapabilityJson()),
-                voice.modelConfig.getModelCode())
-                && textLength > MinimaxTtsConstants.SYNC_TEXT_MAX_LENGTH) {
-            log.info("接口1 MiniMax配音文本过长, modelCode={}, textLen={}, max={}",
-                    voice.modelConfig.getModelCode(), textLength, MinimaxTtsConstants.SYNC_TEXT_MAX_LENGTH);
-            throw TaskErrorPresentation.fromCode(TaskErrorCode.USER_INPUT_TOO_LONG, "文本过长，请精简");
-        }
     }
 
     /**
@@ -2749,12 +2741,14 @@ public class VideoComposeServiceImpl implements VideoComposeService {
      * @param userId  用户ID
      * @return 合成指令
      */
-    private ComposeCommand buildExportCommand(EpisodeExportRequest request, AidEpisodeEditor editor, Long userId) {
+    private ComposeCommand buildExportCommand(EpisodeExportRequest request, AidEpisodeEditor editor,
+                                              Long userId, String aspectRatio) {
         ComposeCommand command = new ComposeCommand();
         command.setUserId(userId);
         command.setProjectId(Objects.nonNull(request.getProjectId()) ? request.getProjectId() : editor.getProjectId());
         command.setEpisodeId(Objects.nonNull(request.getEpisodeId()) ? request.getEpisodeId() : editor.getEpisodeId());
         command.setResolution(request.getResolution());
+        command.setAspectRatio(aspectRatio);
         // 与接口1 同口径按配音对齐：段长取视频/配音较长者，配音超长时本段画面按原速循环补齐，
         // 否则配音长于画面的段会挤乱后续段（音画错位+片尾黑屏）；无配音段不受影响（段长=视频）
         command.setAlignStrategy(ComposeConstants.ALIGN_STRATEGY_AUDIO);

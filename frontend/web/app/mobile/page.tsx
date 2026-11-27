@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { HtmlShellClass } from '@/components/app/HtmlShellClass'
+import { HomeRecordFooter } from '@/components/home/HomeRecordFooter'
 import { openLoginModal, useLoginModalStore } from '@/stores/loginModal'
 import { useUserStore } from '@/stores/user'
 import { MOBILE_CASE_PLAZA_PAGE_SIZE, useCasePlazaFeed, type CasePlazaFeedItem, type CasePlazaFilter } from '@/hooks/useCasePlazaFeed'
@@ -254,6 +255,7 @@ export default function MobileHomePage() {
           <div ref={loadMoreSentinelRef} className={styles.loadMoreSentinel} aria-hidden="true" />
           {!feed.hasMore && feed.status === 'ready' && feed.items.length > 0 ? <p className={styles.feedEnd}>已经到底了</p> : null}
         </section>
+        <HomeRecordFooter />
       </div>
 
       {selected ? <div className={styles.detailBackdrop} onClick={() => setSelected(null)}>

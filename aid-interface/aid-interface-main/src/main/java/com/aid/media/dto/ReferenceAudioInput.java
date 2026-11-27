@@ -14,6 +14,7 @@ public class ReferenceAudioInput
 {
     /** 来源类型：由提示词占位推导出的角色音色试听样音。 */
     public static final String SOURCE_VOICE_SAMPLE = "VOICE_SAMPLE";
+    public static final String SOURCE_PERSONAL_VOICE = "PERSONAL_VOICE";
 
     /** 来源类型：用户显式选择的音频记录。 */
     public static final String SOURCE_AUDIO_RECORD = "AUDIO_RECORD";
@@ -35,6 +36,8 @@ public class ReferenceAudioInput
 
     /** 角色音色绑定 ID。 */
     private Long bindingId;
+
+    private Long personalAudioAssetId;
 
     /** 音色库 ID。 */
     private Long voiceLibraryId;
@@ -65,6 +68,7 @@ public class ReferenceAudioInput
     @JsonIgnore
     public boolean isExplicit()
     {
-        return SOURCE_AUDIO_RECORD.equals(sourceType) || SOURCE_UPLOAD.equals(sourceType);
+        return SOURCE_AUDIO_RECORD.equals(sourceType) || SOURCE_UPLOAD.equals(sourceType)
+                || SOURCE_PERSONAL_VOICE.equals(sourceType);
     }
 }

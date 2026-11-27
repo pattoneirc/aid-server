@@ -11,7 +11,7 @@ export type CharacterFormVoiceFields = {
 export function roleVoiceBindingToFormFields(
   binding?: RoleVoiceBindingVO | null
 ): CharacterFormVoiceFields {
-  if (!binding?.voiceLibraryId || !String(binding.voiceName || '').trim()) {
+  if (!(binding?.personalAudioAssetId || binding?.voiceLibraryId) || !String(binding.voiceName || '').trim()) {
     return {
       voiceover: undefined,
       voiceoverId: undefined,
@@ -21,7 +21,7 @@ export function roleVoiceBindingToFormFields(
   }
   return {
     voiceover: String(binding.voiceName || '').trim(),
-    voiceoverId: String(binding.voiceLibraryId),
+    voiceoverId: binding.personalAudioAssetId ? 'personal:' + binding.personalAudioAssetId : String(binding.voiceLibraryId),
     voiceoverAvatarUrl: String(binding.avatarUrl || '').trim() || undefined,
     voiceoverPreviewUrl: String(binding.sampleUrl || '').trim() || undefined
   }

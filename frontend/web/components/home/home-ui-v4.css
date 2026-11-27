@@ -13,7 +13,8 @@ html.layout-home-new [data-home-theme] .home-new-index.home-ui-v4 {
   --home-gutter: clamp(48px, 8vw, 160px);
   width: 100%;
   min-height: 100%;
-  padding: 0;
+  padding-block-start: 0;
+  padding-inline: 0;
   background: var(--home-bg);
   color: var(--home-text);
 }

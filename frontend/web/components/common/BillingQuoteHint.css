@@ -80,3 +80,21 @@
 .billing-quote-rule-preview .model-billing-rules {
   margin-top: 0;
 }
+
+.workflow-quote-error {
+  flex: 0 0 100%;
+  margin: 0;
+  color: var(--ui-danger, var(--ui-text));
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.workflow-quote-error button {
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

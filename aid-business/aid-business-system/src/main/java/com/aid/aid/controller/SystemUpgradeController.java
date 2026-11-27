@@ -1,6 +1,7 @@
 package com.aid.aid.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -12,9 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.aid.common.annotation.Log;
+import com.aid.common.constant.HttpStatus;
 import com.aid.common.core.controller.BaseController;
 import com.aid.common.core.domain.AjaxResult;
 import com.aid.common.enums.BusinessType;
+import com.aid.common.exception.ServiceException;
 import com.aid.upgrade.dto.OfficialGatewaySaveDto;
 import com.aid.upgrade.dto.DeploymentConfigSaveDto;
 import com.aid.upgrade.dto.DeploymentConfigTestDto;
@@ -143,8 +146,15 @@ public class SystemUpgradeController extends BaseController {
     @PreAuthorize("@ss.hasPermi('aidconfig:upgrade:source')")
     @Log(title = "部署配置应用", businessType = BusinessType.UPDATE)
     @PostMapping("/deployment-config/apply")
-    public AjaxResult applyDeploymentConfig(@RequestBody DeploymentConfigSaveDto saveDto) {
-        return AjaxResult.success(systemUpgradeService.applyDeploymentConfig(saveDto));
+    public ResponseEntity<AjaxResult> applyDeploymentConfig(@RequestBody DeploymentConfigSaveDto saveDto) {
+        try {
+            return ResponseEntity.ok(AjaxResult.success(systemUpgradeService.applyDeploymentConfig(saveDto)));
+        } catch (ServiceException ex) {
+            if (Integer.valueOf(HttpStatus.BAD_REQUEST).equals(ex.getCode())) {
+                return ResponseEntity.badRequest().body(AjaxResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+            }
+            throw ex;
+        }
     }
 
     /** 恢复上一份部署配置并重启。 */
@@ -178,6 +188,18 @@ public class SystemUpgradeController extends BaseController {
     @PostMapping("/rollback")
     public AjaxResult rollback(@RequestBody RollbackRequestDto requestDto) {
         return AjaxResult.success(systemUpgradeService.rollback(requestDto));
+    }
+
+    @PreAuthorize("@ss.hasAnyPermi('aidconfig:upgrade:source,aidconfig:upgrade:rollback')")
+    @GetMapping("/backups")
+    public AjaxResult versionBackups() {
+        return AjaxResult.success(systemUpgradeService.getVersionBackups());
+    }
+
+    @PreAuthorize("@ss.hasPermi('aidconfig:upgrade:source')")
+    @PostMapping("/backups/settings")
+    public AjaxResult saveVersionBackupSettings(@RequestBody UpgradeSourceSaveDto saveDto) {
+        return AjaxResult.success(systemUpgradeService.saveVersionBackupSettings(saveDto));
     }
 
     /**

@@ -74,6 +74,12 @@ public class MediaImageGenerateRequest {
     @JSONField(serialize = false, deserialize = false)
     private transient Map<String, String> managedReferenceImages;
 
+    /** Internal locators of project-owned stored images authorized by the submitting business service. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @JSONField(serialize = false, deserialize = false)
+    @lombok.ToString.Exclude
+    private transient java.util.List<String> storedReferenceImages;
+
     /** Revalidated delivery authorization added after approval; never a client input or billing field. */
     @com.fasterxml.jackson.annotation.JsonIgnore
     @JSONField(serialize = false, deserialize = false)

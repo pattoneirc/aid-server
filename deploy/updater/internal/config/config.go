@@ -119,7 +119,7 @@ func (c *Config) applyDefaults() {
 		c.DownloadTimeoutSeconds = 600
 	}
 	if c.KeepBackups <= 0 {
-		c.KeepBackups = 3
+		c.KeepBackups = 1
 	}
 	if strings.TrimSpace(c.SourceBuildScript) == "" && strings.TrimSpace(c.Install.BackendJar) != "" {
 		dataRoot := filepath.Dir(filepath.Dir(c.Install.BackendJar))

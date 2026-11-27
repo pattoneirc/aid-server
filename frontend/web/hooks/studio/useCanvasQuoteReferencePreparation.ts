@@ -66,14 +66,14 @@ export function useCanvasQuoteReferencePreparation(node: StudioCanvasNode, runti
         const prepared = new Map<string, Awaited<ReturnType<CanvasProjectWorkspaceRuntime['resolveResourceReference']>>>()
         for (const ref of refs) {
           if (!isCurrent()) throw new Error('画布或引用已变化，请重新准备')
-          const sourceKey = JSON.stringify([ref.kind, ref.nodeId, ref.assetId, ref.mediaKind])
+          const sourceKey = JSON.stringify([ref.kind, ref.nodeId, ref.assetId, ref.personalAudioAssetId, ref.mediaKind])
           const resource = prepared.get(sourceKey) ?? await runtime.resolveResourceReference(ref, { isCurrent })
           prepared.set(sourceKey, resource)
         }
         if (!isCurrent()) throw new Error('画布或引用已变化，请重新准备')
         const target = useStudioUiStore.getState().nodes.find(item => item.id === node.id)!
         const references = target.data.composerRefs?.map(ref => {
-          const resource = prepared.get(JSON.stringify([ref.kind, ref.nodeId, ref.assetId, ref.mediaKind]))
+          const resource = prepared.get(JSON.stringify([ref.kind, ref.nodeId, ref.assetId, ref.personalAudioAssetId, ref.mediaKind]))
           return resource ? { ...ref, assetId: String(resource.resourceId), previewUrl: resource.resourceUrl,
             kind: ref.kind === 'asset' || ref.kind === 'library' ? 'upload' as const : ref.kind } : ref
         })

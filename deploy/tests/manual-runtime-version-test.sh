@@ -53,14 +53,37 @@ unset AID_JDK_DOWNLOAD_URL AID_MANUAL_JDK_DOWNLOAD_URL
 [[ "${FFMPEG_RUNTIME_MIRROR_TAG}" == "v1.0.0-beta.6" ]] \
   || { echo 'FAIL: FFmpeg domestic mirror release drifted' >&2; exit 1; }
 unset AID_FFMPEG_PRIMARY_URL_AMD64 AID_FFMPEG_TENCENT_URL_AMD64 AID_FFMPEG_ALIYUN_URL_AMD64
-mapfile -t ffmpeg_amd64_urls < <(ffmpeg_runtime_download_urls amd64)
-[[ "${ffmpeg_amd64_urls[0]}" == 'https://github.com/shijue-aid/aid-studio/releases/download/v1.0.0-beta.6/ffmpeg-8.1.2-amd64-static.tar.xz' ]] \
-   || { echo 'FAIL: FFmpeg official attachment URL changed' >&2; exit 1; }
-AID_FFMPEG_PRIMARY_URL_AMD64="${ffmpeg_amd64_urls[0]}"
-mapfile -t ffmpeg_amd64_urls < <(ffmpeg_runtime_download_urls amd64)
-[[ "${#ffmpeg_amd64_urls[@]}" -eq 1 ]] \
+unset AID_FFMPEG_PRIMARY_URL_ARM64 AID_FFMPEG_TENCENT_URL_ARM64 AID_FFMPEG_ALIYUN_URL_ARM64
+for arch in amd64 arm64; do
+  archive_name="ffmpeg-8.1.2-${arch}-static.tar.xz"
+  mapfile -t ffmpeg_urls < <(ffmpeg_runtime_download_urls "${arch}")
+  [[ "${#ffmpeg_urls[@]}" -eq 3 \
+    && "${ffmpeg_urls[0]}" == "https://api.atomgit.com/api/v5/repos/shijue-aid/aid-studio/releases/v3.0.0/attach_files/${archive_name}/download" \
+    && "${ffmpeg_urls[1]}" == "https://cdn.aidstudio.com.cn/aid/release/ffmpeg/8.1.2/${archive_name}" \
+    && "${ffmpeg_urls[2]}" == "https://github.com/shijue-aid/aid-studio/releases/download/v1.0.0-beta.6/${archive_name}" ]] \
+    || { echo "FAIL: FFmpeg ${arch} default order must be AtomGit, AID CDN, GitHub" >&2; exit 1; }
+done
+AID_FFMPEG_PRIMARY_URL_AMD64="$(ffmpeg_runtime_atomgit_url amd64)"
+AID_FFMPEG_TENCENT_URL_AMD64='https://cdn.aidstudio.com.cn/aid/release/ffmpeg/8.1.2/ffmpeg-8.1.2-amd64-static.tar.xz'
+mapfile -t ffmpeg_urls < <(ffmpeg_runtime_download_urls amd64)
+[[ "${#ffmpeg_urls[@]}" -eq 3 ]] \
   || { echo 'FAIL: duplicate FFmpeg mirror URLs must be attempted only once' >&2; exit 1; }
-unset AID_FFMPEG_PRIMARY_URL_AMD64
+unset AID_FFMPEG_PRIMARY_URL_AMD64 AID_FFMPEG_TENCENT_URL_AMD64
+(
+  FFMPEG_RUNTIME_ROOT="${TMP_ROOT}/ffmpeg-fallback"
+  try_download() {
+    printf '%s\n' "$1" >> "${TMP_ROOT}/ffmpeg-download-order"
+    case "$1" in
+      https://cdn.aidstudio.com.cn/*) printf '%s\n' 'corrupted CDN payload' > "$2" ;;
+      *) return 1 ;;
+    esac
+  }
+  if install_ffmpeg_runtime_version amd64 "$(ffmpeg_runtime_checksum amd64)"; then
+    echo 'FAIL: FFmpeg accepted a corrupted fallback archive' >&2; exit 1
+  fi
+  diff -u <(ffmpeg_runtime_download_urls amd64) "${TMP_ROOT}/ffmpeg-download-order" \
+    || { echo 'FAIL: FFmpeg did not fall back after download or SHA256 failure' >&2; exit 1; }
+)
 ! sed -n '/install_ffmpeg_runtime_version()/,/^)/p' "${ROOT_DIR}/deploy/aid.sh" | grep -q 'rank_download_urls' \
   || { echo 'FAIL: FFmpeg installer must preserve configured mirror priority' >&2; exit 1; }
 configure_ffmpeg_runtime_paths

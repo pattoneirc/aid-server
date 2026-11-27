@@ -38,7 +38,9 @@ deploy/
 if command -v curl >/dev/null 2>&1; then curl -fL --retry 3 -o aid-install.sh https://api.atomgit.com/api/v5/repos/shijue-aid/aid-studio/raw/deploy%2Faid.sh?ref=master; elif command -v wget >/dev/null 2>&1; then wget -O aid-install.sh https://api.atomgit.com/api/v5/repos/shijue-aid/aid-studio/raw/deploy%2Faid.sh?ref=master; else echo 'Install curl or wget first'; false; fi && sudo env AID_REMOTE_BOOTSTRAP=1 bash aid-install.sh install
 ```
 
-The network response is never piped into a shell. The script runs only after `curl`/`wget` writes `aid-install.sh`. `AID_REMOTE_BOOTSTRAP=1` forces that freshly downloaded control logic; an already-installed managed script will not take over. `install` is the automatic entry: first Docker install when nothing is deployed; if AID is already present it checks and upgrades, and does not re-initialize the database. On success it creates `sudo aid` when that name is free. Run `sudo aid default` any time to reprint user/admin URLs (public/private, HTTPS), the database init admin note, and MySQL connection details. Use `sudo aid mysql` for MySQL only.
+Download the installer with GET. AtomGit's raw endpoint can return 404 to a HEAD request. The script runs after `curl` or `wget` writes it to disk. `AID_REMOTE_BOOTSTRAP=1` uses the downloaded installer. The `install` entry chooses a first Docker installation or checks an existing install for upgrades. Use `sudo /usr/local/bin/aid status` where the sudo search path excludes `/usr/local/bin`.
+
+For unattended installation, review the deployment configuration and set `AID_ASSUME_YES=1` and `AID_CONFIG_CONFIRMED=1`. Set `AID_AUTO_INSTALL_DOCKER=yes` to allow installation of a missing Docker runtime, and `AID_IMPORT_OFFICIAL_ASSETS=y` or `n` to choose whether to import the sample assets. Set `AID_LOCAL_RESOURCE_ORIGIN` to the site's HTTP(S) origin if known. It fills a blank resource address on new local-storage installations.
 
 If AtomGit raw files fail, use GitHub:
 
@@ -73,9 +75,9 @@ Empty built-in MySQL passwords and JWT secrets are filled with generated values.
 
 ### Import official assets
 
-After the first Docker or systemd installation passes its health checks, local-storage users can answer **y** to download and import the official asset bundle. Press Enter, answer **n**, or exit to skip it. Upgrades, reinstalls, and unattended runs skip the prompt. If you plan to use COS, OSS, or another object store, skip automatic import and upload the resources to the configured store.
+After the first Docker or systemd installation passes its health checks, users of local storage can answer **y** to import the official asset bundle. The interactive default is **n**. For unattended installs, set `AID_IMPORT_OFFICIAL_ASSETS=y` to import or `n` to skip. Upgrades, reinstalls, and object storage use the manual path.
 
-The installer makes one attempt and checks the archive and its individual files. The application stays available if the import fails. For a manual local import, download the archive and upload it under **Project Upgrade Settings → Official Assets**. [Download the official asset bundle](https://atomgit.com/shijue-aid/aid-studio/releases/download/v3.0.0/aid-official-assets_1.0.0-beta.2.tar.gz)
+The installer makes one attempt and verifies the SHA-256 of the archive and each file. It accepts LF and CRLF line endings in the checksum list. If import fails, the application stays available and the installer points to the manual import instructions. For local storage, upload the archive under **Project Upgrade Settings → Official Assets**. [Download the official asset bundle](https://atomgit.com/shijue-aid/aid-studio/releases/download/v3.0.0/aid-official-assets_1.0.0-beta.2.tar.gz)
 
 ### Update with the latest remote script
 
@@ -105,7 +107,7 @@ Config merge is “local wins, official only fills missing keys”:
 
 - Manifests are HTTPS only. Source comes from the official AID GitHub/AtomGit trees. All three apps must share one `v<version>` tag. Local packages are still checked for layout, path traversal, special links and embedded script syntax.
 - Ed25519 `pkeyutl -rawin` verifies the manifest when OpenSSL supports it; older OpenSSL prints a yellow warning. The online updater always verifies the full signature.
-- The script does not silently open firewalls, change DNS, install HTTPS certificates, drop existing databases or import the large official media bundle. Missing or old Docker is installed only after you accept the risk to existing containers.
+- The script does not silently open firewalls, change DNS, install HTTPS certificates, or drop existing databases. Importing the official asset bundle requires an explicit choice on a first installation with local storage. Missing or old Docker is installed only after you accept the risk to existing containers.
 - Non-install content already under `/data/aid`, version downgrades, database restore and below-recommended hardware default to refuse or extra confirm. Use `AID_ASSUME_YES=1` only in automation that already has an off-host backup.
 - Local backups do not replace off-host backups. Copy the database, `/data/aid/uploadPath` and the config files elsewhere before going live.
 
@@ -208,7 +210,7 @@ URLs after install (real values from `sudo aid default`; the script fills public
 
 - User HTTP: `http://<public-or-private-ipv4>:HTTP_PORT/`
 - Admin HTTP: `http://<public-or-private-ipv4>:ADMIN_PORT/<random-access-code>`
-- Init admin account from `sql/aid-init.sql` is `admin / admin123`. Change it after first login. `sudo aid default` never recovers a later password.
+- The installer generates a random password for the initial `admin` account. The root-only `config/initial-admin-password` file is under the deployed data root. Remove it after changing the password.
 
 No domain is required for HTTP. Keep `HTTP_PORT` and `ADMIN_PORT`. Docker: `COMPOSE_PROFILES=mysql,redis` (do not add `https`). Manual: `HTTPS_ENABLED=false`. Do not set `HTTP_PORT=443`; that is still plaintext HTTP.
 

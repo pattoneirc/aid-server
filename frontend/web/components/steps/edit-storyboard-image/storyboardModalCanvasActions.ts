@@ -178,16 +178,9 @@ const handleUpscaleModelSelect = async (payload: {
 
   clearModalCanvasOverlayLoadingUi(storyboardId, sceneIdx, imageIndex, 'upscale')
 
-  await ctx.refreshSceneRecords(
-    overlayCtx.sceneIndex,
-    upscaleResult.recordId ?? genRecordId,
-    beforeCount,
-    {
-      force: true
-    }
-  )
+  await ctx.refreshSceneRecordsAfterTask(storyboardId, upscaleResult, beforeCount, genRecordId)
 
-  message.success('高清处理完成')
+  if (matchesCreationLiveGenScope(taskScope)) message.success('高清处理完成')
 }
 
 const handleMultiAngle = (imageIndex: number) => {
@@ -359,9 +352,11 @@ const handleMultiAngleGenerate = async (payload: MultiAngleGeneratePayload) => {
   }
 
   clearModalCanvasOverlayLoadingUi(storyboardId, sceneIdx, imageIndex, overlayKind)
-  await ctx.refreshSceneRecords(sceneIdx, result.recordId, beforeCount, { force: true })
+  await ctx.refreshSceneRecordsAfterTask(storyboardId, result, beforeCount)
 
-  message.success(isNineGrid ? '九宫格生图完成' : '多机位生图完成')
+  if (matchesCreationLiveGenScope(taskScope)) {
+    message.success(isNineGrid ? '九宫格生图完成' : '多机位生图完成')
+  }
 }
 
 const handleModifyImage = (imageIndex: number) => {

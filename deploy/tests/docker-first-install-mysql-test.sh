@@ -31,13 +31,21 @@ docker() { echo 'FAIL: test attempted to invoke the Docker daemon' >&2; return 1
 trace_startup() { printf '%s\n' "$1" >> "${orderFile}"; }
 ensure_docker_image() { trace_startup image; }
 docker_container_env_value() { :; }
-compose_cmd() { trace_startup compose; }
+compose_cmd() {
+  if [[ "$(uname -s)" == Linux && ! -d "${AID_DATA_ROOT}/mysql-data/mysql" ]]; then
+    [[ "$(stat -c '%a' "${REPO_DIR}/sql")" == 755 && "$(stat -c '%a' "${REPO_DIR}/sql/aid-init.sql")" == 644 ]] \
+      || { echo 'FAIL: MySQL initialization seed is inaccessible to the container user' >&2; return 1; }
+  fi
+  trace_startup compose
+}
 wait_docker_managed_mysql_bootstrap_complete() { trace_startup bootstrap; }
 wait_docker_container_healthy() { trace_startup health; }
 reconcile_docker_managed_mysql_credentials() { trace_startup reconcile; }
 
 # 首次空目录必须等待 MySQL 官方 entrypoint 完成初始化后再同步账号；
 # 已存在数据目录则先迁移旧凭证，保证重试可恢复。
+REPO_DIR="${TMP_ROOT}/installer"
+( umask 077; mkdir -p "${REPO_DIR}/sql"; printf 'SELECT 1;\n' > "${REPO_DIR}/sql/aid-init.sql" )
 ensure_mysql_ready docker
 [[ "$(tr '\n' ' ' < "${orderFile}")" == 'image compose bootstrap health reconcile ' ]] \
   || { echo 'FAIL: fresh MySQL credential reconciliation raced with entrypoint initialization' >&2; exit 1; }
@@ -46,6 +54,8 @@ mkdir -p "${AID_DATA_ROOT}/mysql-data/mysql"
 ensure_mysql_ready docker
 [[ "$(tr '\n' ' ' < "${orderFile}")" == 'image compose reconcile health ' ]] \
   || { echo 'FAIL: existing MySQL did not reconcile old credentials before health validation' >&2; exit 1; }
+
+REPO_DIR="${ROOT_DIR}"
 
 docker_managed_mysql_business_exec() {
   local query="$*" state

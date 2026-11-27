@@ -10,9 +10,12 @@ import type {
 } from '@/types/generation-api'
 import type { StudioCanvasNode, StudioComposerRef } from '@/types/studio'
 import type { UserModelListItem } from '@/types/business-api'
-import { resolveCapabilityRecord } from '@/utils/modelCapability'
-import { canvasVideoCapabilityLabel, canvasVideoUsesFirstFrame } from './canvasGenerationModels'
+import { CanvasGenerationInputError, validateCanvasGenerationReferenceLimits } from './canvasModelInputValidation'
+import { canvasVideoUsesFirstFrame } from './canvasGenerationModels'
+import { CANVAS_VIDEO_REFERENCE_LIMIT_REASON } from './canvasVideoLinkedNodes'
 import { studioCanvasImageParameters, studioCanvasImagePrompt, studioCanvasVideoParameters } from './studioCanvasGenerationParameters'
+
+export { validateCanvasGenerationReferenceLimits } from './canvasModelInputValidation'
 
 export type CanvasGenerationMediaType = CanvasMediaType | 'DOCUMENT'
 
@@ -44,97 +47,19 @@ export function ensureCanvasGenerationFirstFrame(references: UserGenerationRefer
   else if (references.some(ref => ref.role === 'LAST_FRAME')) throw new CanvasGenerationInputError('已指定尾帧，还需要指定首帧图片')
 }
 
-const VIDEO_INPUT_NAMES: Record<string, string> = {
-  image: '普通参考图',
-  video: '参考视频',
-  audio: '参考音频',
-  firstframe: '首帧图片',
-  lastframe: '尾帧图片'
-}
-
-const REFERENCE_LIMIT_MODE_LABELS: Record<string, string> = {
-  image_to_video: '首帧',
-  last_frame_to_video: '尾帧',
-  image_to_image: '图生图',
-  text_to_image: '文生图'
-}
-
-export class CanvasGenerationInputError extends Error {}
-
-function canvasGenerationSceneRule(capability: Record<string, unknown>, code: string) {
-  const scene = code.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
-  return (capability.sceneRules as Record<string, Record<string, unknown>> | undefined)?.[scene]
-}
-
-export function validateCanvasGenerationReferenceLimits(
-  model: UserModelListItem | undefined,
-  code: string,
-  references: UserGenerationReference[],
-  candidates: CanvasGenerationReferenceCandidate[]
-) {
-  if (!model || !references.length) return
-  const capability = resolveCapabilityRecord(model)
-  const option = model.availableCapabilities?.find(item => item.code === code)
-  const modeCode = option?.generateMode || code
-  const sceneRule = canvasGenerationSceneRule(capability, modeCode)
-  const defaultCode = model.capabilityCode || model.generateMode
-  // A multi-mode catalog row exposes root limits for its default capability.
-  const root = !defaultCode || defaultCode === code ? capability : undefined
-  const types = new Map(candidates.map(item => [item.resourceId, item.mediaType]))
-  const counts = references.reduce((totals, reference) => {
-    const type = types.get(reference.resourceId)
-    if (type === 'IMAGE' || type === 'VIDEO' || type === 'AUDIO') totals[type]++
-    return totals
-  }, { IMAGE: 0, VIDEO: 0, AUDIO: 0 })
-  const limits = [
-    ['maxReferenceImages', counts.IMAGE, '参考图', '张'],
-    ['maxReferenceVideos', counts.VIDEO, '参考视频', '个'],
-    ['maxReferenceAudios', counts.AUDIO, '参考音频', '个'],
-    ['maxReferenceMaterials', counts.IMAGE + counts.VIDEO + counts.AUDIO, '参考素材', '个']
-  ] as const
-  for (const [field, count, label, unit] of limits) {
-    const supported = [root?.[field], sceneRule?.[field], option?.presentation?.[field]]
-      .filter((limit): limit is number => typeof limit === 'number' && Number.isInteger(limit) && limit >= 0)
-    if (!supported.length) continue
-    const max = Math.min(...supported)
-    if (count <= max) continue
-    const displayLabel = canvasVideoCapabilityLabel(modeCode, option?.label)
-    const mode = REFERENCE_LIMIT_MODE_LABELS[modeCode] ?? (displayLabel === modeCode ? '当前' : displayLabel)
-    const modeLabel = mode.endsWith('模式') ? mode : `${mode}模式`
-    throw new CanvasGenerationInputError(max === 0
-      ? `${modeLabel}下，该模型不支持${label}，请移除该素材或切换模式、模型`
-      : `${modeLabel}下，该模型最多支持 ${max} ${unit}${label}，已选 ${count} ${unit}，请移除多余素材或切换模式、模型`)
-  }
-}
-
 export function prepareCanvasVideoGenerationReferences(
   capabilityCode: string,
   model: UserModelListItem | undefined,
   references: UserGenerationReference[],
   candidates: CanvasGenerationReferenceCandidate[]
 ) {
+  const referenceIds = new Set(references.map(ref => ref.resourceId))
+  const videoIds = new Set(candidates.filter(candidate => candidate.mediaType === 'VIDEO'
+    && referenceIds.has(candidate.resourceId)).map(candidate => candidate.resourceId))
+  if (videoIds.size > 1) throw new CanvasGenerationInputError(CANVAS_VIDEO_REFERENCE_LIMIT_REASON)
   if (!capabilityCode) throw new CanvasGenerationInputError('请添加所选模型需要的素材，或切换视频模型')
   if (canvasVideoUsesFirstFrame(capabilityCode)) ensureCanvasGenerationFirstFrame(references, candidates)
   validateCanvasGenerationReferenceLimits(model, capabilityCode, references, candidates)
-
-  const inputs = canvasGenerationSceneRule(resolveCapabilityRecord(model), capabilityCode)?.allowedInputs
-  if (!Array.isArray(inputs) || !inputs.length) return
-
-  const allowed = new Set(inputs.map(input => {
-    const name = input.trim().toLowerCase().replace(/[_-]/g, '')
-    if (/^start(frame|image)$/.test(name)) return 'firstframe'
-    if (/^end(frame|image)$/.test(name)) return 'lastframe'
-    return name.replace(/^(?:reference)?(image|video|audio)s?$/, '$1')
-  }))
-  for (const ref of references) {
-    const mediaType = candidates.find(candidate => candidate.resourceId === ref.resourceId)?.mediaType.toLowerCase()
-    const isFrame = ref.role === 'FIRST_FRAME' || ref.role === 'LAST_FRAME'
-    const input = isFrame ? ref.role.toLowerCase().replace('_', '') : mediaType
-    if (!input || allowed.has(input) || (isFrame && allowed.has('image'))) continue
-    throw new CanvasGenerationInputError(
-      `当前${canvasVideoCapabilityLabel(capabilityCode)}模式不支持${VIDEO_INPUT_NAMES[input] ?? '该素材'}，请移除该素材或切换模式、模型`
-    )
-  }
 }
 
 export function buildCanvasTextNodeReferences(input: {
@@ -181,10 +106,14 @@ function uniqueMention(value: string, index: number, used: Set<string>): string 
   return mention
 }
 
-function supportsReference(kind: UserGenerationKind, mediaType: CanvasGenerationMediaType): boolean {
-  if (kind === 'image') return mediaType === 'IMAGE'
-  if (kind === 'video') return mediaType === 'IMAGE' || mediaType === 'VIDEO' || mediaType === 'AUDIO'
-  return true
+// The request protocol limits accepted media independently of the selected model.
+export function assertCanvasReferenceTransport(kind: UserGenerationKind, mediaType: string, title: string) {
+  if (kind === 'image' && mediaType !== 'IMAGE') {
+    throw new CanvasGenerationInputError(`图片节点无法提交「${title}」作为参考图，请选择图片素材。`)
+  }
+  if (kind === 'video' && !['IMAGE', 'VIDEO', 'AUDIO'].includes(mediaType)) {
+    throw new CanvasGenerationInputError(`视频节点无法提交参考素材「${title}」，请选择图片、视频或音频素材。`)
+  }
 }
 
 /**
@@ -204,7 +133,8 @@ export function buildCanvasGenerationReferences(input: {
   for (const candidate of input.candidates) {
     const resourceId = String(candidate.resourceId || '').trim()
     if (!/^\d+$/.test(resourceId) || resourceId === '0' || usedIds.has(resourceId)) continue
-    if (!supportsReference(input.kind, candidate.mediaType)) continue
+    assertCanvasReferenceTransport(input.kind, candidate.mediaType, candidate.title)
+    if (references.length === 20) throw new CanvasGenerationInputError('本画布节点一次最多可保存 20 个不同的素材引用，请移除多余素材。')
     usedIds.add(resourceId)
     const mention = uniqueMention(candidate.title, references.length + 1, usedMentions)
     if (!titleAliases.has(candidate.title)) titleAliases.set(candidate.title, mention)
@@ -213,7 +143,6 @@ export function buildCanvasGenerationReferences(input: {
       ? requestedRole
       : 'REFERENCE'
     references.push({ resourceId, mention, role })
-    if (references.length >= 20) break
   }
 
   let prompt = input.prompt

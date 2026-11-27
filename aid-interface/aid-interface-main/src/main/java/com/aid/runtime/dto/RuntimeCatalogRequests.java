@@ -21,5 +21,6 @@ public final class RuntimeCatalogRequests {
         @Min(1) @Max(100) private Integer pageSize = 20;
     }
 
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class ModelPage extends MemberPage { }
 }

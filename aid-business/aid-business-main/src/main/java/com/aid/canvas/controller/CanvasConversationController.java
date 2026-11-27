@@ -46,7 +46,9 @@ public class CanvasConversationController extends BaseController {
     }
 
     @Data public static class Workspace { @NotNull private Long workspaceId; }
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class Session extends Workspace { @NotNull private Long sessionId; }
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class Quote extends Session {
         @NotBlank @Size(max = 10000) private String prompt;
         @NotBlank @Size(max = 100) private String modelCode;
@@ -56,24 +58,29 @@ public class CanvasConversationController extends BaseController {
         @NotBlank @Size(max = 64) private String objectId;
         @NotNull private Long expectedVersion;
     }
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class Send extends Quote {
         @NotBlank @Size(max = 64) private String clientRequestId;
         @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 6) private BigDecimal authorizedCredits;
     }
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class Retry extends Session {
         @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 6) private BigDecimal authorizedCredits;
     }
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class Edit extends Session {
         @NotBlank @Size(max = 10000) private String prompt;
         @NotBlank @Size(max = 100) private String modelCode;
         @NotNull private Integer planVersion;
     }
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class Confirm extends Session {
         @NotNull private Integer planVersion;
         @NotBlank @Size(max = 10) private String mode;
         @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 6) private BigDecimal quotedCredits;
         @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 6) private BigDecimal budgetCap;
     }
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class Step extends Session {
         @NotNull private Integer planVersion;
         @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 6) private BigDecimal quotedCredits;

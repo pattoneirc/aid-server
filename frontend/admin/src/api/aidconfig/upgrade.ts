@@ -408,12 +408,34 @@ export function startUpdaterUpgrade() {
 }
 
 /** 提交版本回退任务 */
-export function rollbackSystem(targetVersion: string) {
+export function rollbackSystem(targetVersion: string, backupId?: string) {
   return request<void>({
     url: '/aidconfig/upgrade/rollback',
     method: 'post',
-    data: { targetVersion }
+    data: { targetVersion, backupId }
   });
+}
+
+export interface VersionBackup {
+  id: string;
+  version: string;
+  path: string;
+  createdAt: string;
+  sizeBytes: number;
+}
+
+export interface VersionBackupSettings {
+  directory: string;
+  keep: number;
+  backups: VersionBackup[];
+}
+
+export function getVersionBackups() {
+  return request<Partial<VersionBackupSettings>>({ url: '/aidconfig/upgrade/backups', method: 'get' });
+}
+
+export function saveVersionBackupSettings(backupDir: string, keepBackups: number) {
+  return request<void>({ url: '/aidconfig/upgrade/backups/settings', method: 'post', data: { backupDir, keepBackups } });
 }
 
 /** 查询升级源配置 */

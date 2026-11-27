@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useRef, useState } from 'react'
-import { CloseOutlined } from '@ant-design/icons'
+import { CloseOutlined, ExclamationCircleFilled } from '@ant-design/icons'
 import { createPortal } from 'react-dom'
 import { useStudioUiStore } from '@/stores/studioUi'
 import type { StudioMediaKind } from '@/types/studio'
@@ -19,6 +19,7 @@ export type StudioComposerThumbItem = {
   mediaKind?: StudioMediaKind
   nodeId?: string
   index?: number
+  invalidResourceId?: string
   onInsert: () => void
   onRemove?: () => void
 }
@@ -100,7 +101,8 @@ function Thumb({
   return (
     <span
       ref={rootRef}
-      className="studio-composer-thumbs__item"
+      className={`studio-composer-thumbs__item${item.invalidResourceId ? ' is-invalid' : ''}`}
+      data-invalid-reference={item.invalidResourceId}
       onMouseEnter={() => {
         hoverTimer.current = window.setTimeout(() => {
           setRect(rootRef.current?.getBoundingClientRect() ?? null)
@@ -117,7 +119,8 @@ function Thumb({
         <button
           type="button"
           className="studio-composer-thumbs__hit"
-          aria-label={item.title}
+          aria-label={item.invalidResourceId ? `第 ${item.index} 张参考图需要调整：${item.title}` : item.title}
+          aria-invalid={item.invalidResourceId ? true : undefined}
           onClick={() => {
             if (!item.nodeId) {
               item.onInsert()
@@ -134,6 +137,7 @@ function Thumb({
         >
           {item.index != null ? <b>{item.index}</b> : null}
           {media}
+          {item.invalidResourceId ? <ExclamationCircleFilled className="studio-composer-thumbs__error" aria-hidden /> : null}
         </button>
       </StudioCanvasTooltip>
       {showRemove && item.onRemove ? (

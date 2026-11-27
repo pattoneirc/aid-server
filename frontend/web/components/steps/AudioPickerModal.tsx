@@ -9,6 +9,7 @@ export function AudioPickerModal({
   title,
   className,
   wrapClassName,
+  compact = false,
   onCancel,
   children
 }: {
@@ -16,6 +17,7 @@ export function AudioPickerModal({
   title: string
   className: string
   wrapClassName: string
+  compact?: boolean
   onCancel: () => void
   children: ReactNode
 }) {
@@ -23,7 +25,7 @@ export function AudioPickerModal({
     <Modal
       open={open}
       title={title}
-      width="min(860px, calc(100vw - 32px))"
+      width={compact ? 'min(520px, calc(100vw - 32px))' : 'min(860px, calc(100vw - 32px))'}
       footer={null}
       destroyOnHidden
       wrapClassName={wrapClassName}

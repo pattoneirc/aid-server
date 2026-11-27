@@ -16,6 +16,7 @@ import (
 	// 内嵌时区数据，确保精简 Docker 镜像中的 TZ=Asia/Shanghai 同样生效。
 	_ "time/tzdata"
 
+	"aid-updater/internal/backup"
 	"aid-updater/internal/config"
 	"aid-updater/internal/health"
 	"aid-updater/internal/task"
@@ -47,6 +48,11 @@ func setupLogFile(healthFile string) {
 func main() {
 	configPath := flag.String("config", "/etc/aid-updater/config.json", "配置文件路径")
 	showVersion := flag.Bool("version", false, "打印版本后退出")
+	localPackage := flag.String("apply-local-package", "", "安装管理器已校验的安装包")
+	localBackup := flag.String("restore-local-backup", "", "切换到本机备份编号")
+	currentVersion := flag.String("current-version", "", "已部署版本")
+	targetVersion := flag.String("target-version", "", "安装包目标版本")
+	listBackups := flag.Bool("list-local-backups", false, "列出受管本机版本备份")
 	flag.Parse()
 
 	if *showVersion {
@@ -59,6 +65,22 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
+	}
+	if *listBackups || *localPackage != "" || *localBackup != "" {
+		runner := task.NewRunner(cfg, nil, version)
+		if err := runner.LoadBackupSettings(); err != nil {
+			log.Fatal(err)
+		}
+		if *listBackups {
+			for _, entry := range backup.List(cfg.BackupDir) {
+				fmt.Printf("%s\t%s\t%s\t%d\n", entry.ID, entry.Version, entry.CreatedAt, entry.SizeBytes)
+			}
+			return
+		}
+		if err := runner.RunLocal(context.Background(), *localPackage, *localBackup, *currentVersion, *targetVersion); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	if mkErr := os.MkdirAll(filepath.Dir(cfg.HealthFile), 0o755); mkErr != nil {
 		log.Fatalf("创建健康文件目录失败: %v", mkErr)
@@ -87,7 +109,13 @@ func main() {
 	reporter.Start(ctx, time.Duration(cfg.HeartbeatIntervalSeconds)*time.Second)
 
 	runner := task.NewRunner(cfg, reporter, version)
+	if err := runner.LoadBackupSettings(); err != nil {
+		log.Fatalf("读取备份设置失败: %v", err)
+	}
 	runner.RecoverInterrupted()
+	if err := runner.RefreshBackups(); err != nil {
+		log.Printf("更新备份列表失败: %v", err)
+	}
 
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSeconds) * time.Second)
 	defer ticker.Stop()

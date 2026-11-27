@@ -6,6 +6,7 @@ import type { BillingQuoteRequest, BillingQuoteVO } from '~/types/business-api'
 import { canvasUserBillingQuote, userBillingQuote } from '~/utils/business/billing'
 
 const DEFAULT_DEBOUNCE_MS = 320
+const EMPTY_QUOTE = { quote: null, loading: false, error: '' }
 
 export interface UseBillingQuoteOptions {
   enabled?: boolean
@@ -71,9 +72,14 @@ export function useBillingQuote(
   const forceNextRef = useRef(false)
   const timerRef = useRef<number | null>(null)
   const [refreshToken, setRefreshToken] = useState(0)
-  const [quote, setQuote] = useState<BillingQuoteVO | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const quoteKey = enabled && authToken && serializedRequest
+    ? JSON.stringify([authToken, canvas, serializedRequest]) : ''
+  const [result, setResult] = useState<{
+    key: string
+    quote: BillingQuoteVO | null
+    loading: boolean
+    error: string
+  }>({ key: '', ...EMPTY_QUOTE })
 
   const cancelPending = useCallback(() => {
     if (timerRef.current != null) {
@@ -85,34 +91,24 @@ export function useBillingQuote(
   const clear = useCallback(() => {
     cancelPending()
     sequenceRef.current += 1
-    setQuote(null)
-    setLoading(false)
-    setError('')
-  }, [cancelPending])
+    setResult({ key: quoteKey, ...EMPTY_QUOTE })
+  }, [cancelPending, quoteKey])
 
   const refresh = useCallback(() => {
     forceNextRef.current = true
     cancelPending()
     sequenceRef.current += 1
-    setQuote(null)
-    setLoading(false)
-    setError('')
+    setResult({ key: quoteKey, ...EMPTY_QUOTE, loading: Boolean(quoteKey) })
     setRefreshToken((value) => value + 1)
-  }, [cancelPending])
+  }, [cancelPending, quoteKey])
 
   useEffect(() => {
     cancelPending()
     const current = stableRequest
     const sequence = ++sequenceRef.current
-    setQuote(null)
-    setError('')
+    if (!quoteKey || !current) return
 
-    if (!enabled || !authToken || !serializedRequest || !current) {
-      setLoading(false)
-      return
-    }
-
-    setLoading(true)
+    setResult({ key: quoteKey, ...EMPTY_QUOTE, loading: true })
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null
       const force = forceNextRef.current
@@ -120,25 +116,22 @@ export function useBillingQuote(
       void (canvas ? canvasUserBillingQuote(current) : userBillingQuote(current, { force }))
         .then((value) => {
           if (sequence !== sequenceRef.current) return
-          setQuote(value)
-          setError('')
+          setResult({ key: quoteKey, ...EMPTY_QUOTE, quote: value })
         })
         .catch((reason: unknown) => {
           if (sequence !== sequenceRef.current) return
-          setQuote(null)
-          setError(extractErrorMessage(reason))
-        })
-        .finally(() => {
-          if (sequence === sequenceRef.current) setLoading(false)
+          setResult({ key: quoteKey, ...EMPTY_QUOTE, error: extractErrorMessage(reason) })
         })
     }, Math.max(0, debounceMs))
 
     return () => {
       cancelPending()
+      sequenceRef.current += 1
     }
-  }, [authToken, cancelPending, canvas, debounceMs, enabled, refreshToken, serializedRequest, stableRequest])
+  }, [cancelPending, canvas, debounceMs, quoteKey, refreshToken, stableRequest])
 
-  return { quote, loading, error, refresh, clear }
+  const current = !quoteKey ? EMPTY_QUOTE : result.key === quoteKey ? result : { ...EMPTY_QUOTE, loading: true }
+  return { quote: current.quote, loading: current.loading, error: current.error, refresh, clear }
 }
 
 export default useBillingQuote

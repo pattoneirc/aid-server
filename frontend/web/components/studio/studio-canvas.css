@@ -935,6 +935,22 @@ html[data-studio-free-theme] .studio-workspace--free .studio-node-shell.is-conne
   transform: translate(-50%, -50%) !important;
 }
 .studio-node-handle--left::before { right: -10px; }
+.studio-node-reference-error {
+  position: absolute;
+  inset-inline-start: -22px;
+  top: calc(50% - 7px);
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--studio-ui-error, #e47772);
+  color: #1c1616;
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
 .studio-node-handle--left > span,
 .studio-node-handle--visual > span {
   transform: translate(calc(-50% + var(--studio-connection-handle-left-x, 0px)), calc(-50% + var(--studio-connection-handle-left-y, 0px))) scale(.86);

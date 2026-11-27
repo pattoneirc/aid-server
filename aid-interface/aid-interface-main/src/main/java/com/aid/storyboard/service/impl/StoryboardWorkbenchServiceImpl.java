@@ -66,6 +66,7 @@ import com.aid.storyboard.vo.GenRecordVO;
 import com.aid.storyboard.vo.StoryboardRefImageVO;
 import com.aid.storyboard.vo.StoryboardSpeakerVoiceVO;
 import com.aid.storyboard.vo.StoryboardVO;
+import com.aid.storyboard.support.StoryboardImageBindings;
 import com.aid.common.vo.BatchOperationResultVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -139,14 +140,11 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
 
     /**
      * 配音 TTS 文本最大字符数。
-     * 按 MiniMax 异步长文本 T2A V2 的 text 字段上限（5 万字符）统一收敛；豆包异步
-     * 长文本同量级，通用安全上限。超过该阈值直接在业务层短文案 `文本超长` 拦截，
-     * 不进入预冻结 / 上游提交，避免回滚成本。
      */
     private static final int TTS_TEXT_MAX_LENGTH = 50_000;
     /** 正式配音支持的音频格式（Provider 能力并集，统一任务入口会再次兜底校验）。 */
     private static final Set<String> TTS_AUDIO_FORMATS = Set.of("mp3", "wav", "pcm", "ogg_opus", "opus", "flac");
-    /** 豆包与 MiniMax 当前支持采样率的并集。 */
+    /** 配音允许的采样率。 */
     private static final Set<Integer> TTS_SAMPLE_RATES = Set.of(8000, 16000, 22050, 24000, 32000, 44100, 48000);
 
     /** 余额变动类型：消费 */
@@ -258,6 +256,9 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
     private MediaUrlResolver mediaUrlResolver;
 
     @Autowired
+    private StoryboardImageBindings storyboardImageBindings;
+
+    @Autowired
     private ManagedImageResourceValidator managedImageResourceValidator;
     /** OSS配置管理器：读取上传模式(oss/local)，决定是否对图片做公网远程探测 */
     @Autowired
@@ -266,10 +267,6 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
     /** 用户图片上传内容安全审查守卫：上传后审，命中违规删 OSS 对象 + 抛业务异常 */
     @Autowired
     private com.aid.aid.moderation.UserImageUploadModerationGuard userImageUploadModerationGuard;
-
-    /** MiniMax 归属判定器：业务层门禁与调度层路由共用同一份三级判定 */
-    @Autowired
-    private com.aid.media.provider.MinimaxProviderDetector minimaxProviderDetector;
 
     /** 台词段解析器：列表/详情回填配音类型与发言角色 */
     @Autowired
@@ -892,6 +889,8 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
         target.setDialogueText(source.getDialogueText());
         target.setScriptParams(source.getScriptParams());
         target.setImagePrompt(source.getImagePrompt());
+        target.setScriptImageReferences(source.getScriptImageReferences());
+        target.setImagePromptReferences(source.getImagePromptReferences());
         target.setImagePromptRaw(source.getImagePromptRaw());
         target.setGridType(source.getGridType());
         target.setVideoPrompt(source.getVideoPrompt());
@@ -1230,12 +1229,19 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
         if (request.getTitle() != null) {
             storyboard.setTitle(request.getTitle());
         }
-        boolean scriptChanged = false;
+        boolean referencesChanged = false;
+        if (request.getScriptImageReferences() != null) {
+            var references = storyboardImageBindings.validate(storyboard, request.getScriptImageReferences());
+            var previous = StoryboardImageBindings.read(storyboard.getScriptImageReferences());
+            referencesChanged = !Objects.equals(references, previous == null ? List.of() : previous);
+            storyboard.setScriptImageReferences(StoryboardImageBindings.write(references));
+        }
+        boolean scriptChanged = referencesChanged;
         if (request.getStoryScript() != null) {
             // 编辑回写（单一结构化权威）：把编辑后的可读文本同步进结构化 script_params，
             // 再以合并后的 script_params 规范化重渲染 story_script，保证两者一致；
             // 下游（分镜画师 image_prompt / 视觉导演 video_prompt / 多参视觉导演）统一读 script_params，永远拿到最新编辑值。
-            scriptChanged = syncEditedStoryScript(storyboard, request.getStoryScript());
+            scriptChanged |= syncEditedStoryScript(storyboard, request.getStoryScript());
         }
         if (request.getDialogueText() != null) {
             storyboard.setDialogueText(request.getDialogueText());
@@ -1262,6 +1268,7 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
             clear.eq(AidStoryboard::getId, storyboard.getId());
             clear.set(AidStoryboard::getImagePrompt, null);
             clear.set(AidStoryboard::getImagePromptRaw, null);
+            clear.set(AidStoryboard::getImagePromptReferences, null);
             // 宫格类型随图提示词一起失效（图提示词重生时会按新输出重新解析）
             clear.set(AidStoryboard::getGridType, null);
             clear.set(AidStoryboard::getVideoPrompt, null);
@@ -1285,13 +1292,14 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
     private boolean syncEditedStoryScript(AidStoryboard storyboard, String editedReadable) {
         LinkedHashMap<String, Object> params = parseScriptParamsOrdered(storyboard.getScriptParams());
         LinkedHashMap<String, String> edited = parseReadableToFields(editedReadable);
-        // 自由文本编辑（未识别到结构化字段）只更新展示用 story_script：script_params 未变，
-        // 下游提示词仍读结构化值，若此时清空派生提示词会造成"编辑未生效"的错觉，故返回 false 不触发清空。
         if (edited.isEmpty()) {
+            boolean changed = !Objects.equals(storyboard.getStoryScript(), editedReadable);
+            if (changed) {
+                params.put("用户编辑正文", editedReadable);
+                storyboard.setScriptParams(JSON.toJSONString(params));
+            }
             storyboard.setStoryScript(editedReadable);
-            log.info("分镜编辑未识别到结构化字段，按自由文本仅存 story_script、不清空派生提示词（script_params 未变）: storyboardId={}",
-                    storyboard.getId());
-            return false;
+            return changed;
         }
         // 镜号/场次序号/批内位置是后端维护的元数据，禁止通过可读脚本文本覆盖。
         edited.keySet().removeAll(SHOT_META_SKIP_KEYS);
@@ -1779,17 +1787,6 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
             throw new ServiceException("情感不支持");
         }
 
-        boolean minimax = isMiniMaxProvider(resolved);
-        if (minimax) {
-            validateMinimaxParams(request);
-            if (ttsText.length() > com.aid.media.constants.MinimaxTtsConstants.SYNC_TEXT_MAX_LENGTH) {
-                log.info("generateAudio MiniMax同步接口文本超长: userId={}, modelCode={}, textLen={}, max={}",
-                        userId, resolved.modelCode, ttsText.length(),
-                        com.aid.media.constants.MinimaxTtsConstants.SYNC_TEXT_MAX_LENGTH);
-                throw TaskErrorPresentation.fromCode(TaskErrorCode.USER_INPUT_TOO_LONG, "文本过长，请精简");
-            }
-        }
-
         MediaAudioGenerateRequest mediaReq = new MediaAudioGenerateRequest();
         mediaReq.setUserId(userId);
         mediaReq.setProjectId(storyboard.getProjectId());
@@ -1808,56 +1805,12 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
                 ? request.getAudioFormat() : resolved.audioFormat);
         mediaReq.setSampleRate(request.getSampleRate() != null ? request.getSampleRate() : resolved.sampleRate);
         mediaReq.setParentTaskId(parentTaskId);
-        Map<String, Object> options = minimax ? buildMinimaxAudioOptions(request) : new LinkedHashMap<>();
+        Map<String, Object> options = new LinkedHashMap<>();
         if (StrUtil.isNotBlank(parentExecutionTraceId)) {
             options.put("parentExecutionTraceId", parentExecutionTraceId);
         }
         mediaReq.setOptions(options.isEmpty() ? null : options);
         return new PreparedAudioBillingPlan(storyboard, resolved, ttsText, mediaReq);
-    }
-
-    private Map<String, Object> buildMinimaxAudioOptions(GenerateAudioRequest request) {
-        Map<String, Object> options = new LinkedHashMap<>();
-        if (StrUtil.isNotBlank(request.getLanguageBoost())) {
-            options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_LANGUAGE_BOOST,
-                    request.getLanguageBoost().trim());
-        }
-        if (request.getEnglishNormalization() != null) {
-            options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_ENGLISH_NORMALIZATION,
-                    request.getEnglishNormalization());
-        }
-        if (request.getAigcWatermark() != null) {
-            options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_AIGC_WATERMARK,
-                    request.getAigcWatermark());
-        }
-        if (request.getChannel() != null) {
-            options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_CHANNEL, request.getChannel());
-        }
-        if (request.getBitrate() != null) {
-            options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_BITRATE, request.getBitrate());
-        }
-        if (CollectionUtil.isNotEmpty(request.getPronunciationTone())) {
-            List<String> filteredTone = normalizeMinimaxToneList(request.getPronunciationTone());
-            if (!filteredTone.isEmpty()) {
-                options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_PRONUNCIATION_TONE, filteredTone);
-            }
-        }
-        if (StrUtil.isNotBlank(request.getSoundEffect())) {
-            options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_SOUND_EFFECT,
-                    request.getSoundEffect().trim());
-        }
-        if (request.getVoiceModifyIntensity() != null) {
-            options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_VOICE_MODIFY_INTENSITY,
-                    request.getVoiceModifyIntensity());
-        }
-        if (request.getVoiceModifyTimbre() != null) {
-            options.put(com.aid.media.constants.MinimaxTtsConstants.OPTIONS_VOICE_MODIFY_TIMBRE,
-                    request.getVoiceModifyTimbre());
-        }
-        if (request.getVoiceModifyPitch() != null) {
-            options.put("voiceModifyPitch", request.getVoiceModifyPitch());
-        }
-        return options;
     }
 
     private record PreparedAudioBillingPlan(
@@ -2002,15 +1955,7 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
         String audioFormat;
         Integer sampleRate;
 
-        /**
-         * 模型归属 provider_code（第一优先级判断来源）。
-         */
-        String providerCode;
 
-        /**
-         * capability_json 中声明的 provider 标识（第二优先级判断来源）。
-         */
-        String capabilityProvider;
 
         /**
          * 模型 capability_json 中声明的情感白名单（用于情感入参校验）。
@@ -2053,7 +1998,7 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
             r.defaultPitch = voice.getDefaultPitch() == null ? null : voice.getDefaultPitch().intValue();
             r.audioFormat = voice.getAudioFormat();
             r.sampleRate = voice.getSampleRate();
-            enrichProviderAndEmotions(r, model);
+            r.supportedEmotions = VoiceEmotionCapability.parseModelEmotions(model.getCapabilityJson());
             return r;
         }
         if (Objects.isNull(request.getVoiceModelId()) || StrUtil.isBlank(request.getTimbreCode())) {
@@ -2066,38 +2011,8 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
         r.modelCode = model.getModelCode();
         r.capabilityCode = model.getSelectedCapabilityCode();
         r.voiceCode = request.getTimbreCode();
-        enrichProviderAndEmotions(r, model);
+        r.supportedEmotions = VoiceEmotionCapability.parseModelEmotions(model.getCapabilityJson());
         return r;
-    }
-
-    /**
-     * 解析模型所属 provider_code + capability_json.emotions。
-     * 拿到后存入 {@link ResolvedVoice}，供 generateAudio 内部做"按协议选择性透传 options"
-     * 和"按模型能力校验 emotion"使用。解析失败不抛异常，仅记录日志；emotion 校验分支按
-     * "白名单为空" 处理（不拦截，保留原行为）。
-     */
-    private void enrichProviderAndEmotions(ResolvedVoice r, AidAiModel model) {
-        if (Objects.isNull(model)) {
-            return;
-        }
-        try {
-            AiModelConfigVo cfg = aiModelConfigService.selectByModelId(model.getId(), "audio");
-            if (Objects.nonNull(cfg)) {
-                r.providerCode = cfg.getProviderCode();
-            }
-        } catch (Exception e) {
-            log.warn("resolveVoice 获取 providerCode 失败: modelId={}, err={}", model.getId(), e.getMessage());
-        }
-        r.supportedEmotions = parseSupportedEmotions(model.getCapabilityJson());
-        r.capabilityProvider = parseCapabilityProvider(model.getCapabilityJson());
-    }
-
-    /**
-     * 从 {@code capability_json} 解析 {@code provider} 字段。
-     * JSON 缺失 / 解析失败 / 字段不存在 → 返回 null（调用方视为"无声明"）。
-     */
-    private String parseCapabilityProvider(String capabilityJson) {
-        return com.aid.media.provider.MinimaxProviderDetector.parseCapabilityProvider(capabilityJson);
     }
 
     /**
@@ -2107,91 +2022,6 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
     private java.util.List<String> parseSupportedEmotions(String capabilityJson) {
         return VoiceEmotionCapability.parseModelEmotions(capabilityJson);
     }
-    /** MiniMax channel 合法值白名单 */
-    private static final java.util.Set<Integer> MINIMAX_CHANNEL_WHITELIST = java.util.Set.of(1, 2);
-    /** MiniMax bitrate 合法值白名单 */
-    private static final java.util.Set<Integer> MINIMAX_BITRATE_WHITELIST = java.util.Set.of(32000, 64000, 128000, 256000);
-    /** MiniMax soundEffect 合法值白名单 */
-    private static final java.util.Set<String> MINIMAX_SOUND_EFFECT_WHITELIST = java.util.Set.of(
-            "spacious_echo", "auditorium_echo", "lofi_telephone", "robotic");
-    /** MiniMax languageBoost 合法值白名单（auto + 40 种语言 = 41 个合法值，按官方文档枚举） */
-    private static final java.util.Set<String> MINIMAX_LANGUAGE_BOOST_WHITELIST = java.util.Set.of(
-            "auto",
-            "Chinese", "Chinese,Yue", "English", "Arabic", "Russian", "Spanish",
-            "French", "Portuguese", "German", "Turkish", "Dutch", "Ukrainian",
-            "Vietnamese", "Indonesian", "Japanese", "Italian", "Korean", "Thai",
-            "Polish", "Romanian", "Greek", "Czech", "Finnish", "Hindi",
-            "Bulgarian", "Danish", "Hebrew", "Malay", "Persian", "Slovak",
-            "Swedish", "Croatian", "Filipino", "Hungarian", "Norwegian",
-            "Slovenian", "Catalan", "Nynorsk", "Tamil", "Afrikaans");
-
-    /**
-     * 判定当前解析到的模型是否属于 MiniMax provider。
-     */
-    private boolean isMiniMaxProvider(ResolvedVoice resolved) {
-        if (Objects.isNull(resolved)) {
-            return false;
-        }
-        return minimaxProviderDetector.isMinimax(resolved.providerCode,
-                resolved.capabilityProvider, resolved.modelCode);
-    }
-
-    /**
-     * MiniMax 特有参数前置合法性校验。
-     * 在创建 {@code aid_audio_record} 和进入计费链路 之前 按 MiniMax 文档白名单拦截非法值，
-     * 避免"先扣费再被上游拒绝"的体验问题。不传（null）的字段跳过校验，走默认值。
-     */
-    private void validateMinimaxParams(GenerateAudioRequest request) {
-        // languageBoost：auto + 40 种语言 = 41 个合法值（按 MiniMax 文档枚举）
-        if (StrUtil.isNotBlank(request.getLanguageBoost())
-                && !MINIMAX_LANGUAGE_BOOST_WHITELIST.contains(request.getLanguageBoost().trim())) {
-            log.info("generateAudio MiniMax languageBoost 非法: languageBoost={}", request.getLanguageBoost());
-            throw new ServiceException("参数错误");
-        }
-        // channel：1 / 2
-        if (Objects.nonNull(request.getChannel()) && !MINIMAX_CHANNEL_WHITELIST.contains(request.getChannel())) {
-            log.info("generateAudio MiniMax channel 非法: channel={}", request.getChannel());
-            throw new ServiceException("参数错误");
-        }
-        // bitrate：32000 / 64000 / 128000 / 256000
-        if (Objects.nonNull(request.getBitrate()) && !MINIMAX_BITRATE_WHITELIST.contains(request.getBitrate())) {
-            log.info("generateAudio MiniMax bitrate 非法: bitrate={}", request.getBitrate());
-            throw new ServiceException("参数错误");
-        }
-        // soundEffect：白名单 4 种（trim 后比对）
-        if (StrUtil.isNotBlank(request.getSoundEffect())
-                && !MINIMAX_SOUND_EFFECT_WHITELIST.contains(request.getSoundEffect().trim())) {
-            log.info("generateAudio MiniMax soundEffect 非法: soundEffect={}", request.getSoundEffect());
-            throw new ServiceException("参数错误");
-        }
-        // voiceModifyIntensity / voiceModifyTimbre / voiceModifyPitch：[-100, 100]
-        if (Objects.nonNull(request.getVoiceModifyIntensity())
-                && (request.getVoiceModifyIntensity() < -100 || request.getVoiceModifyIntensity() > 100)) {
-            log.info("generateAudio MiniMax voiceModifyIntensity 越界: {}", request.getVoiceModifyIntensity());
-            throw new ServiceException("参数错误");
-        }
-        if (Objects.nonNull(request.getVoiceModifyTimbre())
-                && (request.getVoiceModifyTimbre() < -100 || request.getVoiceModifyTimbre() > 100)) {
-            log.info("generateAudio MiniMax voiceModifyTimbre 越界: {}", request.getVoiceModifyTimbre());
-            throw new ServiceException("参数错误");
-        }
-        if (Objects.nonNull(request.getVoiceModifyPitch())
-                && (request.getVoiceModifyPitch() < -100 || request.getVoiceModifyPitch() > 100)) {
-            log.info("generateAudio MiniMax voiceModifyPitch 越界: {}", request.getVoiceModifyPitch());
-            throw new ServiceException("参数错误");
-        }
-        // pronunciationTone：归一化（过滤空白 + trim）后校验长度；
-        // 写入 options 时直接复用同一份归一化结果，避免两套清洗逻辑漂移。
-        if (cn.hutool.core.collection.CollectionUtil.isNotEmpty(request.getPronunciationTone())) {
-            for (String tone : normalizeMinimaxToneList(request.getPronunciationTone())) {
-                if (tone.length() > 200) {
-                    log.info("generateAudio MiniMax pronunciationTone 单项过长: len={}", tone.length());
-                    throw new ServiceException("参数错误");
-                }
-            }
-        }
-    }
-
     /**
      * 配音公共参数前置校验。Controller 的 Bean Validation 只覆盖外部调用，批量配音和对口型等内部调用
      * 仍需在 Service 层校验，确保非法参数不会先创建业务记录。
@@ -2231,22 +2061,6 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
         }
     }
 
-    /**
-     * 归一化 pronunciationTone 列表：过滤空白项 + trim。
-     * 校验和 options 写入共用同一份结果，避免两套清洗逻辑分开维护后漂移。
-     */
-    private java.util.List<String> normalizeMinimaxToneList(java.util.List<String> raw) {
-        if (cn.hutool.core.collection.CollectionUtil.isEmpty(raw)) {
-            return java.util.Collections.emptyList();
-        }
-        java.util.List<String> result = new java.util.ArrayList<>();
-        for (String t : raw) {
-            if (StrUtil.isNotBlank(t)) {
-                result.add(t.trim());
-            }
-        }
-        return result;
-    }
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void setFinalSelection(SetFinalSelectionRequest request, Long userId) {
@@ -2872,6 +2686,8 @@ public class StoryboardWorkbenchServiceImpl implements IStoryboardWorkbenchServi
         StoryboardVO vo = buildStoryboardVO(storyboard);
         // 明细接口专属：回填图/视频生成提示词（列表接口不返回，避免大数据量传输）
         vo.setImagePrompt(storyboard.getImagePrompt());
+        vo.setScriptImageReferences(storyboardImageBindings.forDisplay(storyboard.getScriptImageReferences()));
+        vo.setImagePromptReferences(storyboardImageBindings.forDisplay(storyboard.getImagePromptReferences()));
         vo.setVideoPrompt(storyboard.getVideoPrompt());
         // 图生方向（漫剧版）视频提示词与多参方向物理隔离，明细接口一并回填
         vo.setVideoPromptImage(storyboard.getVideoPromptImage());

@@ -243,7 +243,7 @@ export function useStudioImageActions(
     if (reason) { message.warning(reason); return false }
     if (canvasRuntime) {
       const latestNode = useStudioUiStore.getState().nodes.find((item) => item.id === node.id) ?? node
-      return canvasRuntime.generateNode('image', latestNode.id, prompt.trim() ? prompt : latestNode.data.prompt)
+      return canvasRuntime.generateNode('image', latestNode.id, prompt)
     }
     const requestKey = `${useStudioUiStore.getState().scopeKey}:${node.id}`
     return runStudioRequestSingleFlight(`${requestKey}:image-edit-submit`, async () => {
@@ -364,7 +364,7 @@ export function useStudioImageActions(
     const latestNode = useStudioUiStore.getState().nodes.find((item) => item.id === node.id) ?? node
     const prompt = promptOverride?.trim() || latestNode.data.prompt
     if (canvasRuntime) {
-      const canvasPrompt = promptOverride?.trim() ? promptOverride : latestNode.data.prompt
+      const canvasPrompt = promptOverride ?? latestNode.data.prompt
       return canvasRuntime.generateNode('image', latestNode.id, canvasPrompt)
     }
     const storyboardId = await resolveStoryboardIdForSubmit()

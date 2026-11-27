@@ -86,6 +86,10 @@ public class StoryboardVO {
      */
     private String imagePrompt;
 
+    private java.util.List<com.aid.storyboard.dto.StoryboardImageReference> scriptImageReferences;
+
+    private java.util.List<com.aid.storyboard.dto.StoryboardImageReference> imagePromptReferences;
+
     /**
      * 分镜视频提示词——多参方向（对应 {@code aid_storyboard.video_prompt}），仅明细接口返回，列表接口为 null。
      */

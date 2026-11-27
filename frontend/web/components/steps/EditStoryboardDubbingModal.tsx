@@ -732,6 +732,10 @@ export function EditStoryboardDubbingModal({
               <aside className="stage-config-panel dubbing-stage-config">
                 <div className="dubbing-config-below-tabs">
                   <DubbingEditLeftPanel
+                    key={currentSceneIndexVal}
+                    storyboardId={resolveStoryboardIdForIndex(ctx, currentSceneIndexVal) ?? undefined}
+                    projectId={Number(useCreationStore.getState().currentProjectId)}
+                    episodeId={Number(useCreationStore.getState().currentEpisodeId) || 0}
                     dialogue={S.draftDialogue.value}
                     emotion={S.draftEmotion.value}
                     emotionOptions={S.emotionLabelOptions.value}

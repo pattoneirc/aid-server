@@ -51,7 +51,6 @@ interface WorkbenchForm {
 
 const OPERATION_META: Record<VoiceWorkbenchOperation, { label: string; description: string; icon: React.ReactNode }> = {
   SYNTHESIZE: { label: '配音试听', description: '使用已有音色生成一段站长试听音频', icon: <SoundOutlined /> },
-  REGISTER_CLONE: { label: '注册式音色复刻', description: '向供应商注册长期可复用的新音色', icon: <CloudUploadOutlined /> },
   REFERENCE_CLONE: { label: '参考样本克隆', description: '本次请求携带参考录音进行零样本克隆', icon: <AudioOutlined /> },
   DESIGN: { label: '声音设计', description: '通过文字描述设计新声音并生成试听', icon: <ExperimentOutlined /> }
 };
@@ -209,9 +208,9 @@ export default function VoiceWorkbenchWizard({ open, modelOptions, onClose, onPu
   const supported = (field: string) => required(field)
     || operationCapability?.optionalFields?.includes(field) === true;
   const needsSample = required('sourceFileId')
-    || operation === 'REGISTER_CLONE' || operation === 'REFERENCE_CLONE';
+    || operation === 'REFERENCE_CLONE';
   const showVoiceCode = required('voiceCode') || supported('voiceCode')
-    || operation === 'SYNTHESIZE' || operation === 'REGISTER_CLONE';
+    || operation === 'SYNTHESIZE';
   const showText = required('text') || supported('text')
     || operation === 'SYNTHESIZE' || operation === 'REFERENCE_CLONE' || operation === 'DESIGN';
   const showDescription = required('description') || supported('description') || operation === 'DESIGN';
@@ -485,11 +484,7 @@ export default function VoiceWorkbenchWizard({ open, modelOptions, onClose, onPu
       <Row gutter={16}>
         {showVoiceCode && (
           <Col span={12}><Form.Item name="voiceCode" label="音色编码" rules={[
-            ...(required('voiceCode') ? [{ required: true, message: '请输入音色编码' }] : []),
-            ...(operation === 'REGISTER_CLONE' ? [{
-              pattern: /^[A-Za-z](?:[A-Za-z0-9_-]{6,126}[A-Za-z0-9])$/,
-              message: '需为 8–128 位，以字母开头、字母或数字结尾，仅含字母、数字、下划线或横线'
-            }] : [])
+            ...(required('voiceCode') ? [{ required: true, message: '请输入音色编码' }] : [])
           ]}>
             <Input maxLength={128} placeholder={operation === 'SYNTHESIZE' ? '已有音色 voice_code' : '为新音色指定供应商编码'} />
           </Form.Item></Col>

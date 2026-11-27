@@ -6,7 +6,7 @@
   "pollIntervalSeconds": 3,
   "heartbeatIntervalSeconds": 5,
   "downloadTimeoutSeconds": 600,
-  "keepBackups": 3,
+  "keepBackups": 1,
   "sourceBuildScript": "/data/aid/installer/deploy/build-release-from-source.sh",
   "sourceBuildTimeoutSeconds": 7200,
   "install": {

@@ -978,6 +978,7 @@ public class StoryboardImagePromptServiceImpl implements IStoryboardImagePromptS
                 upd.eq(AidStoryboard::getUserId, userId);
                 upd.eq(AidStoryboard::getDelFlag, DEL_FLAG_NORMAL);
                 upd.set(AidStoryboard::getImagePrompt, prompt);
+                upd.set(AidStoryboard::getImagePromptReferences, null);
                 upd.set(AidStoryboard::getImagePromptRaw, StrUtil.sub(llmRaw, 0, 65535));
                 // 宫格类型回填（重新生成时若本次无宫格类型则置 null，避免残留旧值）
                 upd.set(AidStoryboard::getGridType, gridType);

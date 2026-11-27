@@ -3,6 +3,7 @@ package task
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -31,7 +32,10 @@ const (
 )
 
 // runApply 执行系统升级或版本回退：下载→校验→解压→备份→停服→替换→SQL→启动→健康检查，失败自动回滚。
-func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) error {
+func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) (result error) {
+	if isRollback && t.BackupID != "" {
+		return r.switchBackup(ctx, t)
+	}
 	if err := contextCancellationError(ctx); err != nil {
 		return err
 	}
@@ -40,7 +44,7 @@ func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) error {
 	var sourceBuilder *manifest.SourceBuilderArtifact
 	var err error
 	buildFromSource := t.BuildFromSource
-	if !buildFromSource && !isRollback {
+	if t.localPackage == "" && !buildFromSource && !isRollback {
 		buildFromSource, err = sourceBuildFromSignedManifest(ctx, t)
 		if err != nil {
 			if cancelErr := contextCancellationError(ctx); cancelErr != nil {
@@ -52,7 +56,12 @@ func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) error {
 			log.Printf("检测到旧版后台提交的升级任务，已按签名清单切换为源码构建: %s", t.TargetVersion)
 		}
 	}
-	if buildFromSource {
+	if t.localPackage != "" {
+		info, err := os.Stat(t.localPackage)
+		if err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("本地安装包不可读: %s", t.localPackage)
+		}
+	} else if buildFromSource {
 		if isRollback {
 			return fmt.Errorf("源码构建暂不支持版本回退")
 		}
@@ -80,9 +89,13 @@ func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) error {
 	extractDir := filepath.Join(r.cfg.WorkDir, fmt.Sprintf("extract-%s", t.TaskID))
 	sourceWorkDir := filepath.Join(r.cfg.WorkDir, fmt.Sprintf("source-%s", t.TaskID))
 	sourceBuilderPath := filepath.Join(r.cfg.WorkDir, fmt.Sprintf("source-builder-%s.sh", t.TaskID))
-	defer r.cleanupWork(archivePath, extractDir, sourceWorkDir, sourceBuilderPath, sourceBuilderPath+".part")
+	defer func() {
+		result = errors.Join(result, r.cleanupVersionTaskWork(t))
+	}()
 
-	if buildFromSource {
+	if t.localPackage != "" {
+		archivePath = t.localPackage
+	} else if buildFromSource {
 		r.reportProgress(t, 8, "构建源码", "正在拉取三端版本标签并编译，期间 CPU 占用会明显升高")
 		if err := prepareTargetSourceBuilderContext(ctx, sourceBuilder, sourceBuilderPath); err != nil {
 			if cancelErr := contextCancellationError(ctx); cancelErr != nil {
@@ -142,6 +155,7 @@ func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) error {
 	// 3. 数据库前置校验：需要执行 SQL 但未启用数据库配置时，提前失败（此时尚未停服，无损）
 	sqlDir := filepath.Join(packageRoot, pkgSQLDir)
 	rollbackScript := ""
+	var upgradeScripts []string
 	if isRollback {
 		if t.DatabaseCompatible == nil || !*t.DatabaseCompatible {
 			rollbackScript = strings.TrimSpace(t.DatabaseRollback)
@@ -159,89 +173,42 @@ func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) error {
 				return fmt.Errorf("回退包内缺少数据库回退脚本: %s", rollbackScript)
 			}
 		}
-	} else if hasSQLScripts(sqlDir) && !r.cfg.Database.Enabled {
-		return fmt.Errorf("升级包含数据库变更，请先在升级器配置中启用 database")
+	} else {
+		upgradeScripts, err = dbexec.PlanUpgrade(sqlDir, t.SourceVersion, t.TargetVersion)
+		if err != nil {
+			return err
+		}
+		if len(upgradeScripts) > 0 && !r.cfg.Database.Enabled {
+			return fmt.Errorf("升级包含数据库变更，请先在升级器配置中启用 database")
+		}
 	}
 
 	if err := r.closeCancellationWindow(ctx, t); err != nil {
 		return err
 	}
-	databaseChangePlanned := r.cfg.Database.Enabled && ((!isRollback && hasSQLScripts(sqlDir)) || (isRollback && rollbackScript != ""))
-	backendStopped := false
-	if databaseChangePlanned {
-		r.reportProgress(t, 60, "进入维护", "正在停止后端写入并准备一致性数据库快照")
-		if err := sysctl.StopService(r.cfg.Install.ServiceManager, r.cfg.Install.BackendService); err != nil {
-			return fmt.Errorf("进入数据库维护状态失败: %w", err)
-		}
-		backendStopped = true
-		// 迁移历史必须在备份前创建，使结构、数据和执行记录进入同一快照。
-		if err := dbexec.EnsureHistoryTable(r.cfg.Database); err != nil {
-			if startErr := startBackend(r.cfg); startErr != nil {
-				return fmt.Errorf("准备数据库迁移历史失败(%v)，恢复服务也失败(%v)", err, startErr)
-			}
-			return fmt.Errorf("准备数据库迁移历史失败: %w", err)
-		}
-	}
-
-	// 4. 备份（含可选数据库备份；数据库备份必须先于任何 SQL 变更）；
-	//    保留份数以后台「升级源配置」随任务下发的值优先，未下发时用本地配置
-	if t.KeepBackups > 0 {
-		r.cfg.KeepBackups = t.KeepBackups
-	}
 	tag := "upgrade"
 	if isRollback {
 		tag = "rollback"
 	}
-	r.reportProgress(t, 60, "创建备份", "正在备份三端产物、配置与数据库")
-	snapshot, err := backup.Create(r.cfg, fmt.Sprintf("%s-%s", tag, t.TargetVersion))
+	snapshot, recoveryPath, created, err := r.beginVersionChange(t, tag)
 	if err != nil {
-		if backendStopped {
-			if startErr := startBackend(r.cfg); startErr != nil {
-				return fmt.Errorf("备份失败(%v)，恢复原服务也失败(%v)", err, startErr)
-			}
-		}
-		return fmt.Errorf("备份失败，已中止: %w", err)
-	}
-	log.Printf("备份完成: %s", snapshot.Dir)
-	recoveryPath, err := r.createRecovery(t, snapshot)
-	if err != nil {
-		if backendStopped {
-			if startErr := startBackend(r.cfg); startErr != nil {
-				return fmt.Errorf("创建恢复记录失败(%v)，恢复原服务也失败(%v)", err, startErr)
-			}
-		}
 		return err
 	}
+	defer func() { result = errors.Join(result, r.discardFailedSnapshot(result, recoveryPath, snapshot, created)) }()
 	databaseDirty := false
 	r.reportProgress(t, 67, "创建备份", "升级前完整备份已创建")
 
 	// 5. 升级的增量 SQL 在停止业务写入后执行。执行记录表和业务结构已经一起
 	//    进入升级前快照，失败时先清空当前 schema 再完整恢复，不会遗留新表或假 SUCCESS。
-	if !isRollback && r.cfg.Database.Enabled && hasSQLScripts(sqlDir) {
+	if len(upgradeScripts) > 0 {
 		r.reportProgress(t, 70, "升级数据库", "正在执行未应用的增量 SQL")
 		if err := markDatabaseDirty(recoveryPath); err != nil {
-			_ = os.Remove(recoveryPath)
-			if startErr := startBackend(r.cfg); startErr != nil {
-				return fmt.Errorf("更新恢复记录失败(%v)，恢复原服务也失败(%v)", err, startErr)
-			}
-			return fmt.Errorf("更新恢复记录失败，数据库迁移未开始: %w", err)
+			return r.restoreAndReport(t, snapshot, err, recoveryPath, false)
 		}
 		databaseDirty = true
-		count, err := dbexec.ExecuteDir(r.cfg.Database, sqlDir)
+		count, err := dbexec.ExecuteMigrations(r.cfg.Database, sqlDir, upgradeScripts)
 		if err != nil {
-			if stopErr := sysctl.StopService(r.cfg.Install.ServiceManager, r.cfg.Install.BackendService); stopErr != nil {
-				log.Printf("恢复数据库前停止服务失败: %v", stopErr)
-			}
-			restoreErr := backup.RestoreDatabase(r.cfg, snapshot)
-			startErr := startBackend(r.cfg)
-			if restoreErr != nil {
-				return fmt.Errorf("执行增量SQL失败(%v)，数据库恢复失败(%v)，备份目录: %s", err, restoreErr, snapshot.Dir)
-			}
-			if startErr != nil {
-				return fmt.Errorf("执行增量SQL失败，数据库已恢复但服务启动失败: %v", startErr)
-			}
-			_ = os.Remove(recoveryPath)
-			return fmt.Errorf("执行增量SQL失败，已恢复数据库: %w", err)
+			return r.restoreAndReport(t, snapshot, fmt.Errorf("执行增量 SQL 失败: %w", err), recoveryPath, true)
 		}
 		if count > 0 {
 			log.Printf("已执行 %d 个增量SQL脚本", count)
@@ -249,13 +216,6 @@ func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) error {
 	}
 	r.reportProgress(t, 75, "准备切换", "数据库检查完成，准备切换程序版本")
 
-	// 6. 停服并替换产物；数据库升级已进入维护状态时无需重复停止。
-	if !backendStopped {
-		if err := sysctl.StopService(r.cfg.Install.ServiceManager, r.cfg.Install.BackendService); err != nil {
-			return r.restoreAndReport(t, snapshot, fmt.Errorf("停止服务失败: %w", err), recoveryPath, databaseDirty)
-		}
-		backendStopped = true
-	}
 	r.reportProgress(t, 79, "切换版本", "后端已停止，正在原子替换三端产物")
 	if err := r.replaceArtifacts(packageRoot, newJar); err != nil {
 		return r.restoreAndReport(t, snapshot, err, recoveryPath, databaseDirty)
@@ -308,16 +268,7 @@ func (r *Runner) runApply(ctx context.Context, t *Task, isRollback bool) error {
 	if auxErr != nil {
 		return r.restoreAndReport(t, snapshot, auxErr, recoveryPath, databaseDirty)
 	}
-	if err := markRecoveryCompleted(recoveryPath); err != nil {
-		if stopErr := sysctl.StopService(r.cfg.Install.ServiceManager, r.cfg.Install.BackendService); stopErr != nil {
-			log.Printf("提交恢复记录失败后停止服务失败: %v", stopErr)
-		}
-		return r.restoreAndReport(t, snapshot, fmt.Errorf("提交升级完成状态失败: %w", err), recoveryPath, databaseDirty)
-	}
-	if err := os.Remove(recoveryPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("清理已完成任务的恢复记录失败: %v", err)
-	}
-	return nil
+	return r.completeVersionChange(t, recoveryPath, snapshot, databaseDirty)
 }
 
 // preflightTargetRuntime 使用目标升级包内的管理脚本准备运行环境。它必须在创建
@@ -1139,19 +1090,6 @@ func locateBackendJar(packageRoot string) (string, error) {
 		return "", fmt.Errorf("包内 backend 目录应有且仅有一个jar, 实际 %d 个", len(jars))
 	}
 	return filepath.Join(backendDir, jars[0]), nil
-}
-
-func hasSQLScripts(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".sql") {
-			return true
-		}
-	}
-	return false
 }
 
 func dirExists(path string) bool {

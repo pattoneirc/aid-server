@@ -13,7 +13,7 @@ public class VoicePreviewRequest {
     /** 试听文本，字数上限 = aid_config 试听秒数 × 4.5 字/秒（缺省 15 字），超过直接拒绝。必填 */
     private String text;
 
-    /** 豆包/minimax TTS 模型 aid_ai_model.id */
+    /** TTS 模型 aid_ai_model.id */
     private Long voiceModelId;
 
     /** 厂商音色编码 */

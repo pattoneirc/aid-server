@@ -200,6 +200,7 @@ export async function followStoryboardImageGenerateTask(payload: {
             storyboardId,
             data: {
               recordId: recovered.recordId,
+              recordIds: recovered.recordIds,
               imageUrl: recovered.imageUrl,
               items: recovered.items
             },
@@ -234,6 +235,7 @@ export async function followStoryboardImageGenerateTask(payload: {
           storyboardId,
           data: {
             recordId: recovered.recordId,
+            recordIds: recovered.recordIds,
             imageUrl: recovered.imageUrl,
             items: recovered.items
           },

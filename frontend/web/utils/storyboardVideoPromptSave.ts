@@ -9,7 +9,7 @@ function validateRequiredVideoPrompt(
     return { ok: false, message: '提示词不能为空' }
   }
   if (text.length > maxLength) {
-    return { ok: false, message: '提示词过长' }
+    return { ok: false, message: `提示词当前 ${text.length} 字，所选模型最多支持 ${maxLength} 字。` }
   }
   return { ok: true }
 }
@@ -46,7 +46,7 @@ export function validateEdgeVideoPromptPlain(
   const text = String(plain ?? '')
   if (!text.trim()) return { ok: true }
   if (text.length > maxLength) {
-    return { ok: false, message: '提示词过长' }
+    return { ok: false, message: `提示词当前 ${text.length} 字，所选模型最多支持 ${maxLength} 字。` }
   }
   return { ok: true }
 }

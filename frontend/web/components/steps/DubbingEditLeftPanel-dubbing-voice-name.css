@@ -124,7 +124,7 @@
   flex: 1 0 100%;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0;
+  min-height: 44px;
 }
 
 .dubbing-edit-left .dubbing-lip-label {
@@ -133,18 +133,48 @@
   color: var(--home-text, var(--ui-text, #e6edf3));
 }
 
-.dubbing-edit-left .dubbing-lip-row .ant-switch {
-  background: var(--ui-raised, rgba(106, 123, 148, 0.7)) !important;
-  border: 1px solid var(--ui-hair, rgba(180, 198, 224, 0.48)) !important;
+.dubbing-edit-left .dubbing-lip-switch {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
 }
 
-.dubbing-edit-left .dubbing-lip-row .ant-switch.ant-switch-checked {
-  background: var(--ui-surface, linear-gradient(270deg, #0e59fa 0%, #00abd8 100%)) !important;
-  border-color: var(--ui-ring, rgba(0, 171, 216, 0.95)) !important;
+.dubbing-edit-left .dubbing-lip-switch:focus-visible {
+  outline: 2px solid var(--ui-text);
+  outline-offset: 2px;
 }
 
-.dubbing-edit-left .dubbing-lip-row .ant-switch .ant-switch-handle::before {
-  background: var(--ui-raised, #ffffff) !important;
+.dubbing-edit-left .dubbing-lip-switch__track {
+  display: flex;
+  align-items: center;
+  width: 42px;
+  height: 22px;
+  padding-inline: 3px;
+  border: 1px solid var(--ui-muted);
+  border-radius: 999px;
+  background: var(--ui-raised);
+  color: var(--ui-text);
+}
+
+.dubbing-edit-left .dubbing-lip-switch__track::before {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+.dubbing-edit-left .dubbing-lip-switch[aria-checked='true'] .dubbing-lip-switch__track {
+  justify-content: flex-end;
+  border-color: var(--ui-brand);
+  background: var(--ui-brand);
+  color: var(--ui-bg);
 }
 
 .dubbing-edit-left .dubbing-start-btn {
@@ -209,4 +239,10 @@
 
 .dubbing-edit-left .ant-upload-drag-icon .anticon {
   color: var(--accent-400, var(--ui-brand, #38bdf8)) !important;
+}
+
+.dubbing-edit-left .dubbing-recording-player {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
 }

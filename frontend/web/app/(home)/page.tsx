@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import CasePlazaMasonry from '~/components/home/CasePlazaMasonry'
 import HomeComposer from '~/components/home/composer/HomeComposer'
 import { GallerySubmitIcon } from '~/components/home/GallerySubmitIcon'
+import { HomeRecordFooter } from '~/components/home/HomeRecordFooter'
 import { HomeSegmented } from '~/components/home/theme/HomeSegmented'
 import { useHomePointerChrome } from '~/components/home/theme/useHomePointerChrome'
 import { useHomeHeroContentReady } from '~/composables/useHomeHeroContentReady'
@@ -144,6 +145,7 @@ export default function HomeNewIndexPage() {
             : <HomeCasePlazaFeed activeTab={activeTab} searchQuery={searchQuery} onOpen={rememberCasePosition} />}
         </section>
         </div>
+        <HomeRecordFooter />
       </div>
 
       {submissionReady ? (

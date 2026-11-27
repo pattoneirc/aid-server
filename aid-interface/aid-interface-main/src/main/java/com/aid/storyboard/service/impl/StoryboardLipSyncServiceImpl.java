@@ -55,16 +55,14 @@ import com.aid.billing.service.BillingPreHoldCalculationService;
 import com.aid.billing.service.BillingQuoteAssembler;
 import com.aid.billing.vo.BillingQuoteVO;
 import com.aid.common.utils.DateUtils;
-import com.aid.domain.vo.AiModelConfigVo;
 import com.aid.enums.CreationStepEnum;
 import com.aid.enums.GenTypeEnum;
-import com.aid.media.constants.MinimaxTtsConstants;
 import com.aid.media.dto.MediaTaskResponse;
 import com.aid.media.dto.MediaVideoGenerateRequest;
 import com.aid.media.dto.PreparedMediaBillingInput;
+import com.aid.media.dto.ReferenceAudioInput;
 import com.aid.media.enums.MediaTaskStatus;
 import com.aid.media.enums.MediaType;
-import com.aid.media.provider.MinimaxProviderDetector;
 import com.aid.media.service.AudioSilencePaddingService;
 import com.aid.media.service.IMediaGenerationService;
 import com.aid.media.service.MediaBillingQuotePreparer;
@@ -79,9 +77,9 @@ import com.aid.rps.queue.BatchTaskSlotService;
 import com.aid.rps.resolver.StoryboardAudioReferenceResolver;
 import com.aid.rps.resolver.StoryboardAudioReferenceResolver.DialogueSegment;
 import com.aid.rps.resolver.StoryboardImageReferenceResolver;
+import com.aid.rps.resolver.StoryboardPromptAudioReferenceResolver;
 import com.aid.rps.service.IAssetExtractService;
 import com.aid.rps.sse.AssetExtractSseManager;
-import com.aid.service.IAiModelConfigService;
 import com.aid.step.service.ICreationStepService;
 import com.aid.storyboard.dto.GenerateAudioRequest;
 import com.aid.storyboard.dto.LipSyncRequest;
@@ -124,6 +122,8 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
     private static final String TASK_STATUS_FAILED = "FAILED";
     private static final String TASK_STATUS_PARTIAL_FAILED = "PARTIAL_FAILED";
     private static final String TASK_STATUS_CANCELLED = "CANCELLED";
+
+    private static final int AUDIO_SOURCE_UPLOADED = 2;
 
     /** 编排父任务不直接计费：以 SUCCESS + 0 金额明确闭合，真实费用由 TTS/视频子任务承担。 */
     private static final String BILLING_STATUS_SUCCESS = "SUCCESS";
@@ -260,14 +260,6 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
     @Resource
     private IAidAiModelService aidAiModelService;
 
-    /** 模型配置查询：MiniMax 归属判定第一优先级取 providerCode */
-    @Resource
-    private IAiModelConfigService aiModelConfigService;
-
-    /** MiniMax 归属判定器：与单分镜配音门禁、调度层路由共用同一份三级判定 */
-    @Resource
-    private MinimaxProviderDetector minimaxProviderDetector;
-
     /** 单分镜配音链路（统一任务 + 统一计费）与产物选中（setFinalSelection） */
     @Resource
     private IStoryboardWorkbenchService storyboardWorkbenchService;
@@ -277,6 +269,9 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
 
     @Resource
     private StoryboardAudioReferenceResolver audioReferenceResolver;
+
+    @Resource
+    private StoryboardPromptAudioReferenceResolver promptAudioReferenceResolver;
 
     @Resource
     private AssetExtractSseManager sseManager;
@@ -424,28 +419,32 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         List<BillingQuoteVO> items = new ArrayList<>();
         for (AidStoryboard storyboard : plan.targets()) {
             Long boundVoice = plan.voiceByStoryboardId().get(storyboard.getId());
-            items.add(storyboardWorkbenchService.quoteAudio(
-                    buildLipSyncAudioRequest(storyboard, boundVoice, plan.tts()), userId));
+            if (plan.recording() == null) {
+                items.add(storyboardWorkbenchService.quoteAudio(
+                        buildLipSyncAudioRequest(storyboard, boundVoice, plan.tts()), userId));
+            }
             items.add(quoteLipSyncVideo(storyboard,
                     plan.sourceVideoByStoryboardId().get(storyboard.getId()),
-                    plan.lipSyncModel(), userId));
+                    plan.lipSyncModel(), plan.recording(), userId));
         }
         return billingQuoteAssembler.aggregate(quoteType, items);
     }
 
     private BillingQuoteVO quoteLipSyncVideo(AidStoryboard storyboard, AidGenRecord videoRecord,
-                                               AidAiModel lipSyncModel, Long userId) {
+                                               AidAiModel lipSyncModel, ReferenceAudioInput recording,
+                                               Long userId) {
         MediaVideoGenerateRequest request = new MediaVideoGenerateRequest();
         request.setUserId(userId);
         request.setProjectId(storyboard.getProjectId());
         request.setEpisodeId(storyboard.getEpisodeId());
         request.setModelName(lipSyncModel.getModelCode());
         request.setPrompt(LIP_SYNC_TASK_PROMPT);
-        request.setDurationSeconds(resolveLipSyncDurationSeconds(videoRecord, null));
+        request.setDurationSeconds(resolveLipSyncDurationSeconds(
+                videoRecord, recording == null ? null : recording.getDurationMs()));
         Map<String, Object> options = new LinkedHashMap<>();
         options.put(OPTIONS_KEY_VIDEO_URL, mediaUrlResolver.toFullUrl(videoRecord.getFileUrl()));
         // 报价阶段驱动音频尚未生成；仅用于能力 presence 校验，不触发下载或上游调用。
-        options.put(OPTIONS_KEY_AUDIO_URL, "quote://pending-audio");
+        options.put(OPTIONS_KEY_AUDIO_URL, recording == null ? "quote://pending-audio" : recording.getSampleUrl());
         request.setOptions(options);
 
         PreparedMediaBillingInput prepared = mediaBillingQuotePreparer.prepareVideoBilling(request);
@@ -470,10 +469,21 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         if (request == null || userId == null) {
             throw new ServiceException("参数错误");
         }
-        assertFallbackVoicePaired(request.getVoiceLibraryId(), request.getVoiceModelId(), request.getTimbreCode());
         AidStoryboard storyboard = getStoryboardWithOwnerCheck(request.getStoryboardId(), userId);
         creationStepService.checkStepUnlocked(storyboard.getProjectId(), storyboard.getEpisodeId(), userId,
                 CreationStepEnum.AUDIO.getValue());
+        if (request.getReferenceAudioId() != null) {
+            ReferenceAudioInput recording = promptAudioReferenceResolver.resolve("", storyboard.getProjectId(),
+                    storyboard.getEpisodeId(), userId, List.of(), List.of(request.getReferenceAudioId()))
+                    .getAudioReferences().stream().findFirst()
+                    .orElseThrow(() -> new ServiceException("录音不可用，请重新上传"));
+            validateSingleSpeaker(storyboard);
+            return new LipSyncBillingPlan(List.of(storyboard), Map.of(),
+                    Map.of(storyboard.getId(), loadStoryboardVideo(storyboard, userId)), toTtsParams(request),
+                    resolveLipSyncModel(), recording);
+        }
+
+        assertFallbackVoicePaired(request.getVoiceLibraryId(), request.getVoiceModelId(), request.getTimbreCode());
         if (StrUtil.isBlank(DialogueTextSanitizer.sanitize(storyboard.getDialogueText()))) {
             throw new ServiceException("暂无台词");
         }
@@ -487,9 +497,8 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         }
         validateVoicesUsable(voices, tts.voiceLibraryId(), tts.voiceModelId());
         validateSingleSpeaker(storyboard);
-        validateMinimaxTextLimit(targets, voices, tts.voiceLibraryId(), tts.voiceModelId());
         return new LipSyncBillingPlan(targets, Map.copyOf(voices),
-                Map.of(storyboard.getId(), videoRecord), tts, resolveLipSyncModel());
+                Map.of(storyboard.getId(), videoRecord), tts, resolveLipSyncModel(), null);
     }
 
     /** 正式批量对口型和报价共用的只读目标、音色、源视频及模型计划。 */
@@ -529,9 +538,8 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         }
         validateVoicesUsable(voices, tts.voiceLibraryId(), tts.voiceModelId());
         targets.forEach(this::validateSingleSpeaker);
-        validateMinimaxTextLimit(targets, voices, tts.voiceLibraryId(), tts.voiceModelId());
         return new LipSyncBillingPlan(List.copyOf(targets), Map.copyOf(voices),
-                Map.copyOf(videos), tts, resolveLipSyncModel());
+                Map.copyOf(videos), tts, resolveLipSyncModel(), null);
     }
 
     private record LipSyncBillingPlan(
@@ -539,7 +547,8 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
             Map<Long, Long> voiceByStoryboardId,
             Map<Long, AidGenRecord> sourceVideoByStoryboardId,
             LipSyncTtsParams tts,
-            AidAiModel lipSyncModel) {
+            AidAiModel lipSyncModel,
+            ReferenceAudioInput recording) {
     }
 
     @Override
@@ -585,7 +594,7 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
 
             Long dispatchTaskId = taskId;
             threadPoolTaskExecutor.execute(() -> executeLipSync(dispatchTaskId, LipSyncMode.SINGLE, tts, targets,
-                    voiceByStoryboardId, sourceVideoByStoryboardId, lipSyncModel, userId));
+                    voiceByStoryboardId, sourceVideoByStoryboardId, plan.recording(), userId));
         } catch (ServiceException se) {
             releaseStoryboardRunning(storyboard.getId(), taskId, pendingHolder);
             if (Objects.nonNull(taskId)) {
@@ -827,7 +836,7 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         List<AidStoryboard> finalTargets = targets;
         try {
             threadPoolTaskExecutor.execute(() -> executeLipSync(taskId, LipSyncMode.BATCH, tts, finalTargets,
-                    voiceByStoryboardId, finalVideoByStoryboardId, lipSyncModel, userId));
+                    voiceByStoryboardId, finalVideoByStoryboardId, null, userId));
         } catch (Exception rejectEx) {
             // 线程池拒绝：父任务置失败，避免永久 PENDING
             log.error("批量对口型派发被拒绝, taskId={}", taskId, rejectEx);
@@ -921,7 +930,7 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
     private void executeLipSync(Long taskId, LipSyncMode mode, LipSyncTtsParams tts, List<AidStoryboard> targets,
                                 Map<Long, Long> voiceByStoryboardId,
                                 Map<Long, AidGenRecord> sourceVideoByStoryboardId,
-                                AidAiModel lipSyncModel, Long userId) {
+                                ReferenceAudioInput recording, Long userId) {
         // PENDING → PROCESSING（CAS，防重复执行）
         boolean started = extractTaskService.update(Wrappers.<AidExtractTask>lambdaUpdate()
                 .eq(AidExtractTask::getId, taskId)
@@ -979,7 +988,7 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
             }
             writeResultData(taskId, TASK_STATUS_PROCESSING, items, null);
 
-            // 逐条提交 TTS；同一用户的统一计费锁仍按现有机制串行，媒体任务本身可异步执行。
+            // 上传的录音已就绪，直接提交视频。文本朗读由 TTS 终态事件继续推进。
             for (int i = 0; i < total; i++) {
                 if (mode == LipSyncMode.BATCH && cancelBatchParentIfRequested(taskId)) {
                     return;
@@ -992,6 +1001,12 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
                 AidStoryboard storyboard = targets.get(i);
                 Long boundVoice = voiceByStoryboardId.get(storyboard.getId());
                 try {
+                    if (recording != null) {
+                        AidAudioRecord audioRecord = saveUploadedLipSyncAudio(storyboard, recording, userId);
+                        recordAudioSubmission(taskId, storyboard.getId(), audioRecord);
+                        submitVideoChild(loadWorkflowParent(taskId), audioRecord);
+                        continue;
+                    }
                     AidAudioRecord audioRecord = submitDubForLipSync(
                             taskId, storyboard, boundVoice, tts, userId);
                     recordAudioSubmission(taskId, storyboard.getId(), audioRecord);
@@ -1128,6 +1143,25 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         }
     }
 
+    private AidAudioRecord saveUploadedLipSyncAudio(AidStoryboard storyboard, ReferenceAudioInput recording,
+                                                   Long userId) {
+        AidAudioRecord audio = new AidAudioRecord();
+        audio.setUserId(userId);
+        audio.setProjectId(storyboard.getProjectId());
+        audio.setEpisodeId(storyboard.getEpisodeId());
+        audio.setStoryboardId(storyboard.getId());
+        audio.setAudioSource(AUDIO_SOURCE_UPLOADED);
+        audio.setAudioUrl(recording.getSampleUrl());
+        audio.setDurationMs(recording.getDurationMs());
+        audio.setEnableLipSync(LIP_SYNC_ENABLED);
+        audio.setStatus(MediaTaskStatus.SUCCEEDED.name());
+        audio.setDelFlag(DEL_FLAG_NORMAL);
+        audio.setCreateBy(String.valueOf(userId));
+        audio.setCreateTime(DateUtils.getNowDate());
+        aidAudioRecordService.save(audio);
+        return audio;
+    }
+
     /**
      * 台词现场 TTS 配音：复用单分镜配音链路（统一任务 + 统一计费），提交后立即返回业务记录。
      * 音频终态和 OSS 就绪由公共媒体事件推进，不在业务线程内轮询等待。
@@ -1197,7 +1231,9 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         // DB 存相对路径，下游 provider 需完整可访问 URL
         String videoUrl = mediaUrlResolver.toFullUrl(videoRecord.getFileUrl());
         // 驱动音频：短于源视频时补静音对齐，避免成片被截到台词长度
-        LipSyncDrivingAudio driving = resolveDrivingAudio(videoRecord, audioRecord);
+        LipSyncDrivingAudio driving = Objects.equals(AUDIO_SOURCE_UPLOADED, audioRecord.getAudioSource())
+                ? new LipSyncDrivingAudio(mediaUrlResolver.toFullUrl(audioRecord.getAudioUrl()), audioRecord.getDurationMs())
+                : resolveDrivingAudio(videoRecord, audioRecord);
 
         MediaVideoGenerateRequest mediaReq = new MediaVideoGenerateRequest();
         mediaReq.setUserId(userId);
@@ -1593,6 +1629,10 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
                         attachMediaChild(parentTaskId, audio.getSyncMediaTaskId());
                     }
                     onChildMediaTaskChanged(audio.getTtsMediaTaskId());
+                    continue;
+                }
+                if (audio != null && Objects.equals(AUDIO_SOURCE_UPLOADED, audio.getAudioSource())) {
+                    submitVideoChild(parent, audio);
                     continue;
                 }
             }
@@ -2171,12 +2211,8 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
     private LipSyncDrivingAudio resolveDrivingAudio(AidGenRecord videoRecord, AidAudioRecord audioRecord) {
         String originUrl = mediaUrlResolver.toFullUrl(audioRecord.getAudioUrl());
         Integer audioDurationMs = audioRecord.getDurationMs();
-        if (Objects.isNull(audioDurationMs) || audioDurationMs <= 0
-                || Objects.isNull(videoRecord.getVideoDuration()) || videoRecord.getVideoDuration() <= 0) {
-            return new LipSyncDrivingAudio(originUrl, audioDurationMs);
-        }
-        int targetMs = (int) (videoRecord.getVideoDuration() * MS_PER_SECOND);
-        if (targetMs - audioDurationMs < LIP_SYNC_PAD_THRESHOLD_MS) {
+        Integer targetMs = resolvePaddedAudioDurationMs(videoRecord, audioDurationMs);
+        if (Objects.equals(targetMs, audioDurationMs)) {
             return new LipSyncDrivingAudio(originUrl, audioDurationMs);
         }
         String paddedUrl = audioSilencePaddingService.padWithSilence(originUrl, targetMs);
@@ -2189,6 +2225,15 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         log.info("对口型驱动音频已补静音, audioRecordId={}, audioMs={}, targetMs={}",
                 audioRecord.getId(), audioDurationMs, targetMs);
         return new LipSyncDrivingAudio(paddedUrl, targetMs);
+    }
+
+    private Integer resolvePaddedAudioDurationMs(AidGenRecord videoRecord, Integer audioDurationMs) {
+        if (audioDurationMs == null || audioDurationMs <= 0
+                || videoRecord.getVideoDuration() == null || videoRecord.getVideoDuration() <= 0) {
+            return audioDurationMs;
+        }
+        int targetMs = (int) (videoRecord.getVideoDuration() * MS_PER_SECOND);
+        return targetMs - audioDurationMs >= LIP_SYNC_PAD_THRESHOLD_MS ? targetMs : audioDurationMs;
     }
 
     /** 对口型驱动音频：实际提交给上游的音频 URL 与其时长（毫秒）。 */
@@ -2543,89 +2588,6 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
     }
 
     /**
-     * MiniMax 音色单条文本上限前置校验：逐分镜定位所用 TTS 模型，MiniMax 模型的分镜
-     * 按清洗后台词长度校验（与实际下发 TTS 的文本同口径），超限整批拒绝。
-     * 查询字段精简：音色仅 select id/model_id，模型仅 select id/model_code/capability_json。
-     */
-    private void validateMinimaxTextLimit(List<AidStoryboard> targets, Map<Long, Long> voiceByStoryboardId,
-                                          Long fallbackVoiceLibraryId, Long fallbackVoiceModelId) {
-        // 音色 → 模型ID 映射（绑定音色 + 兜底音色）
-        Set<Long> voiceIds = new LinkedHashSet<>(voiceByStoryboardId.values());
-        if (Objects.nonNull(fallbackVoiceLibraryId)) {
-            voiceIds.add(fallbackVoiceLibraryId);
-        }
-        voiceIds.remove(null);
-        Map<Long, Long> modelIdByVoiceId = new HashMap<>();
-        if (CollectionUtil.isNotEmpty(voiceIds)) {
-            List<AidAiVoiceLibrary> voices = aidAiVoiceLibraryService.list(
-                    Wrappers.<AidAiVoiceLibrary>lambdaQuery()
-                            .select(AidAiVoiceLibrary::getId, AidAiVoiceLibrary::getModelId)
-                            .in(AidAiVoiceLibrary::getId, voiceIds));
-            for (AidAiVoiceLibrary voice : voices) {
-                if (Objects.nonNull(voice.getModelId())) {
-                    modelIdByVoiceId.put(voice.getId(), voice.getModelId());
-                }
-            }
-        }
-        Set<Long> modelIds = new LinkedHashSet<>(modelIdByVoiceId.values());
-        if (Objects.nonNull(fallbackVoiceModelId)) {
-            modelIds.add(fallbackVoiceModelId);
-        }
-        if (CollectionUtil.isEmpty(modelIds)) {
-            return;
-        }
-        // 三级判定各模型是否 MiniMax（providerCode → capability_json.provider → supportsModel 兜底）
-        Set<Long> minimaxModelIds = resolveMinimaxModelIds(modelIds);
-        if (CollectionUtil.isEmpty(minimaxModelIds)) {
-            return;
-        }
-        for (AidStoryboard storyboard : targets) {
-            Long voiceId = voiceByStoryboardId.get(storyboard.getId());
-            if (Objects.isNull(voiceId)) {
-                voiceId = fallbackVoiceLibraryId;
-            }
-            Long modelId = Objects.nonNull(voiceId) ? modelIdByVoiceId.get(voiceId) : fallbackVoiceModelId;
-            if (Objects.isNull(modelId) || !minimaxModelIds.contains(modelId)) {
-                continue;
-            }
-            String sanitized = DialogueTextSanitizer.sanitize(storyboard.getDialogueText());
-            if (StrUtil.length(sanitized) > MinimaxTtsConstants.BATCH_TEXT_MAX_LENGTH) {
-                log.info("批量对口型 MiniMax 单条文本超限: storyboardId={}, textLen={}, max={}",
-                        storyboard.getId(), StrUtil.length(sanitized), MinimaxTtsConstants.BATCH_TEXT_MAX_LENGTH);
-                throw TaskErrorPresentation.fromCode(TaskErrorCode.USER_INPUT_TOO_LONG, "文本过长，请精简");
-            }
-        }
-    }
-
-    /**
-     * 批量判定 MiniMax 模型集合。
-     * 查询字段精简：仅 select id/model_code/capability_json。
-     */
-    private Set<Long> resolveMinimaxModelIds(Set<Long> modelIds) {
-        Set<Long> result = new LinkedHashSet<>();
-        List<AidAiModel> models = aidAiModelService.list(
-                Wrappers.<AidAiModel>lambdaQuery()
-                        .select(AidAiModel::getId, AidAiModel::getModelCode, AidAiModel::getCapabilityJson)
-                        .in(AidAiModel::getId, modelIds));
-        for (AidAiModel model : models) {
-            String providerCode = null;
-            try {
-                AiModelConfigVo config = aiModelConfigService.selectByModelId(model.getId());
-                if (Objects.nonNull(config)) {
-                    providerCode = config.getProviderCode();
-                }
-            } catch (Exception e) {
-                log.warn("批量对口型获取 providerCode 失败: modelId={}, err={}", model.getId(), e.getMessage());
-            }
-            String capabilityProvider = MinimaxProviderDetector.parseCapabilityProvider(model.getCapabilityJson());
-            if (minimaxProviderDetector.isMinimax(providerCode, capabilityProvider, model.getModelCode())) {
-                result.add(model.getId());
-            }
-        }
-        return result;
-    }
-
-    /**
      * 解析分镜台词中的发言角色主名（按出现顺序去重）。
      * 旁白段与无角色标记的纯文本段不计入；解析异常返回空列表（展示增强，不阻断流程）。
      */
@@ -2666,7 +2628,7 @@ public class StoryboardLipSyncServiceImpl implements IStoryboardLipSyncService {
         if (speakers.size() > 1) {
             log.info("对口型包含多个发言角色, storyboardId={}, speakers={}",
                     storyboard.getId(), speakers);
-            throw new ServiceException("仅支持单角色");
+            throw new ServiceException("当前对口型仅支持单个发言角色，请选用单人台词分镜");
         }
     }
 

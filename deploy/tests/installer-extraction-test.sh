@@ -36,6 +36,10 @@ printf 'server {}\n' > "${STAGING_DIR}/installer/deploy/docker/nginx/aid-https.c
 printf 'location / { try_files $uri $uri/ /200.html; }\n' > "${STAGING_DIR}/installer/deploy/docker/nginx/web-static.conf"
 printf '#!/usr/bin/env bash\n' > "${STAGING_DIR}/installer/deploy/docker/rocketmq/broker-entrypoint.sh"
 printf 'SELECT 1;\n' > "${STAGING_DIR}/installer/sql/aid-init.sql"
+mkdir -p "${STAGING_DIR}/installer/deploy/nginx"
+for file in render.sh bootstrap.sh docker-start.sh public.conf.template admin.conf.template; do
+  printf '# fixture\n' > "${STAGING_DIR}/installer/deploy/nginx/${file}"
+done
 chmod +x "${STAGING_DIR}/installer/deploy/aid.sh"
 
 DOT_PACKAGE="${TMP_ROOT}/dot-prefix.tar.gz"

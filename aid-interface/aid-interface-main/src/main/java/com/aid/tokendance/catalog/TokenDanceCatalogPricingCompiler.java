@@ -70,7 +70,6 @@ public final class TokenDanceCatalogPricingCompiler {
             compileVideoTokens(model, protocol, rule, items, warnings, resolvedContext.videoEstimates);
         }
         else if (token) compileTokens(rule, items, warnings);
-        else if (protocol.equals("minimax:voice_clone")) compileClone(rule, items, warnings);
         else compileMedia(rule, items, warnings);
         // BillingSku.priority 的 Java 默认值是 0，但管理端结构化编辑契约从 1 开始。
         // 目录编译结果必须显式生成稳定且唯一的优先级，避免多档 SKU 全部落成 0 后
@@ -462,22 +461,6 @@ public final class TokenDanceCatalogPricingCompiler {
         long value = new BigDecimal(node.asText()).multiply(BigDecimal.valueOf(1000)).longValueExact();
         if (value < 0) throw new IllegalArgumentException("像素边界不能为负数");
         return value;
-    }
-
-    private static void compileClone(BillingRule rule, List<JsonNode> items, List<String> warnings) {
-        rule.setMeterType("PER_CHAR");
-        BillingSku sku = sku("clone_with_preview", "注册音色与试听", Map.of(), "PER_CHAR");
-        for (JsonNode item : items) {
-            JsonNode plan = flatPlan(item);
-            if (plan == null || rate(plan) == null) { warnings.add("克隆成本不完整"); continue; }
-            if (item.path("id").asText().endsWith(":counts") && "counts".equals(plan.path("unit").asText())) {
-                sku.setFixedSurcharge(rate(plan));
-            } else if (item.path("id").asText().endsWith(":characters") && "kCharacters".equals(plan.path("unit").asText())) {
-                sku.setPricePerChar(rate(plan).divide(BigDecimal.valueOf(1000)));
-            } else warnings.add("克隆计量口径待适配");
-        }
-        if (sku.getFixedSurcharge() == null || sku.getPricePerChar() == null) warnings.add("克隆或试听成本缺失");
-        else rule.getSkus().add(sku);
     }
 
     private static void compileVideoTokens(

@@ -257,6 +257,15 @@ public class AliyunImsVideoProviderClient implements VideoProviderClient
         }
         Map<String, Object> timeline = new LinkedHashMap<>();
         List<Map<String, Object>> videoClips = buildMediaClips(plan.getTracks().getVideoItems(), urls, false);
+        if (plan.getOutputWidth() != null && plan.getOutputHeight() != null)
+        {
+            for (Map<String, Object> clip : videoClips)
+            {
+                clip.put("Width", plan.getOutputWidth());
+                clip.put("Height", plan.getOutputHeight());
+                clip.put("AdaptMode", "Contain");
+            }
+        }
         timeline.put("VideoTracks", List.of(Map.of("VideoTrackClips", videoClips)));
 
         List<Map<String, Object>> audioTracks = new ArrayList<>();
@@ -340,6 +349,11 @@ public class AliyunImsVideoProviderClient implements VideoProviderClient
     {
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("MediaURL", toOwnedOssUrl(plan.getOutputObjectPath(), plan.getStorage()));
+        if (plan.getOutputWidth() != null && plan.getOutputHeight() != null)
+        {
+            output.put("Width", plan.getOutputWidth());
+            output.put("Height", plan.getOutputHeight());
+        }
         String codec = "H.265".equalsIgnoreCase(plan.getCodec()) ? "H.265" : "H.264";
         output.put("Video", Map.of("Codec", codec));
         return output;

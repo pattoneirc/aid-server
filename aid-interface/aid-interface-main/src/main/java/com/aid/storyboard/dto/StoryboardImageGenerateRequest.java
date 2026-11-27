@@ -23,6 +23,9 @@ public class StoryboardImageGenerateRequest
     /** 图生图提示词。 */
     private String imagePrompt;
 
+    /** 单镜编辑器提交的参考图，空数组表示主动清空选择。 */
+    private List<StoryboardImageReference> imageReferences;
+
     /** 图片模型编码。 */
     private String modelName;
 

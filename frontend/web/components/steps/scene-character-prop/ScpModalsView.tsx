@@ -322,6 +322,11 @@ export function ScpModalsView({ ctx }: { ctx: ScpCtx }) {
         open={ctx.showVoiceTimbrePickerModal.value}
         onOpenChange={(v) => ctx.showVoiceTimbrePickerModal.set(v)}
         initialVoiceName={ctx.voicePickerInitialName.value}
+        initialVoiceId={ctx.characterForms.value[ctx.currentVoiceCharacterIndex.value]?.[
+          ctx.currentVoiceFormIndex.value
+        ]?.voiceoverId}
+        allowPersonalVoices
+        showRoleVoiceHint
         onConfirm={(payload) => void ctx.handleVoiceTimbreConfirm(payload)}
       />
       <audio

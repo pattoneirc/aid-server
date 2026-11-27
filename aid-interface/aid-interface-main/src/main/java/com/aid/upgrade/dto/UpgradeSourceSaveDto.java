@@ -27,4 +27,6 @@ public class UpgradeSourceSaveDto {
 
     /** 升级前自动备份的保留份数（1-50，留空按默认值 3） */
     private Integer keepBackups;
+
+    private String backupDir;
 }

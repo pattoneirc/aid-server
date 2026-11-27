@@ -359,6 +359,7 @@ export interface StudioComposerRef {
   nodeId?: string
   assetId?: string
   sourceCategoryCode?: string
+  personalAudioAssetId?: string
   title: string
   mediaKind: StudioMediaKind
   previewUrl?: string

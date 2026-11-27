@@ -1,8 +1,10 @@
 package com.aid.asset.audio.service.impl;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 import org.springframework.stereotype.Service;
@@ -29,6 +31,7 @@ import com.aid.asset.audio.dto.ReferenceAudioRenameRequest;
 import com.aid.asset.audio.dto.ReferenceAudioUploadRequest;
 import com.aid.asset.audio.service.IReferenceAudioBusinessService;
 import com.aid.asset.audio.vo.ReferenceAudioVO;
+import com.aid.aid.service.IOssBusinessService;
 import com.aid.common.aid.oss.util.MediaUrlResolver;
 import com.aid.common.exception.ServiceException;
 import com.aid.common.utils.DateUtils;
@@ -39,9 +42,12 @@ import com.aid.media.util.MediaBytesFetcher;
 import com.aid.media.util.MediaFormatResolver;
 import com.aid.media.util.UploadedMediaPathValidator;
 
+import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * 参考音频业务实现。
@@ -131,6 +137,9 @@ public class ReferenceAudioBusinessServiceImpl implements IReferenceAudioBusines
     @Resource
     private MediaUrlResolver mediaUrlResolver;
 
+    @Resource
+    private IOssBusinessService ossBusinessService;
+
     /**
      * 登记上传的参考音频。
      * 不加事务：时长探测需要下载音频，放进事务会让 HTTP 往返期间一直占着数据库连接；
@@ -190,18 +199,62 @@ public class ReferenceAudioBusinessServiceImpl implements IReferenceAudioBusines
         }
         validateDuration(durationMs, minSeconds, maxSeconds, userId, fullUrl);
 
+        Long fileSize = content.truncated() ? null : (long) content.bytes().length;
+        return saveReferenceAudio(request.getProjectId(), episodeId, userId, audioName,
+                relativeUrl, audioFormat, durationMs, fileSize);
+    }
+
+    @Override
+    public ReferenceAudioVO uploadFile(MultipartFile file, Long projectId, Long requestedEpisodeId, Long userId) {
+        Long episodeId = resolveOwnedEpisodeId(projectId, requestedEpisodeId, userId);
+        String fileName = Objects.toString(file.getOriginalFilename(), "");
+        String audioFormat = FileUtil.extName(fileName).toLowerCase(Locale.ROOT);
+        if (!ReferenceAudioLimiter.isProbeableFormat(audioFormat)) {
+            throw new ServiceException("录音格式不支持，可用格式："
+                    + String.join("、", ReferenceAudioLimiter.probeableFormats()));
+        }
+        validateQuota(projectId, userId);
+        int minSeconds = readConfigInt(CFG_MIN_DURATION_SECONDS, DEFAULT_MIN_DURATION_SECONDS);
+        int maxSeconds = readConfigInt(CFG_MAX_DURATION_SECONDS, DEFAULT_MAX_DURATION_SECONDS);
+        if (file.isEmpty() || file.getSize() > MAX_PROBE_BYTES) {
+            throw new ServiceException("录音文件为空或超过 32 MB");
+        }
+        Integer durationMs;
+        try {
+            durationMs = AudioDurationProber.probeDurationMs(file.getBytes(), false);
+        } catch (IOException e) {
+            throw new ServiceException("录音读取失败，请重新上传");
+        }
+        if (durationMs == null || durationMs <= 0) {
+            throw new ServiceException("无法读取录音时长，请检查文件");
+        }
+        validateDuration(durationMs, minSeconds, maxSeconds, userId, null);
+        String audioName = FileUtil.mainName(fileName);
+        audioName = StrUtil.isBlank(audioName) ? "本地配音" : StrUtil.subPre(audioName, AUDIO_NAME_MAX_LEN);
+        String uploadedUrl = ossBusinessService.uploadList(List.of(file), "audio").get(0).getUrl();
+        try {
+            return saveReferenceAudio(projectId, episodeId, userId, audioName,
+                    mediaUrlResolver.toRelativePath(uploadedUrl), audioFormat, durationMs, file.getSize());
+        } catch (RuntimeException e) {
+            ossBusinessService.deleteListByUrl(List.of(uploadedUrl));
+            throw e;
+        }
+    }
+
+    private ReferenceAudioVO saveReferenceAudio(Long projectId, Long episodeId, Long userId, String audioName,
+                                                 String relativeUrl, String audioFormat, Integer durationMs,
+                                                 Long fileSize) {
         Date now = DateUtils.getNowDate();
         String operator = String.valueOf(userId);
         AidReferenceAudio entity = new AidReferenceAudio();
         entity.setUserId(userId);
-        entity.setProjectId(request.getProjectId());
+        entity.setProjectId(projectId);
         entity.setEpisodeId(episodeId);
         entity.setAudioName(audioName);
         entity.setAudioUrl(relativeUrl);
         entity.setDurationMs(durationMs);
         entity.setAudioFormat(audioFormat);
-        // 文件大小由服务端按实际下载字节数认定；截断说明超出探测上限，真实大小未知不臆造
-        entity.setFileSize(content.truncated() ? null : (long) content.bytes().length);
+        entity.setFileSize(fileSize);
         entity.setStatus(STATUS_NORMAL);
         entity.setDelFlag(DEL_FLAG_NORMAL);
         entity.setCreateBy(operator);
@@ -214,15 +267,15 @@ public class ReferenceAudioBusinessServiceImpl implements IReferenceAudioBusines
             ok = referenceAudioService.save(entity);
         } catch (Exception ex) {
             log.error("参考音频落库异常, userId={}, projectId={}, err={}",
-                    userId, request.getProjectId(), ex.getMessage(), ex);
+                    userId, projectId, ex.getMessage(), ex);
             throw new ServiceException("保存失败");
         }
         if (!ok) {
-            log.error("参考音频落库失败, userId={}, projectId={}", userId, request.getProjectId());
+            log.error("参考音频落库失败, userId={}, projectId={}", userId, projectId);
             throw new ServiceException("保存失败");
         }
         log.info("参考音频登记成功, id={}, userId={}, projectId={}, episodeId={}, format={}, durationMs={}",
-                entity.getId(), userId, request.getProjectId(), episodeId, audioFormat, durationMs);
+                entity.getId(), userId, projectId, episodeId, audioFormat, durationMs);
         return toVO(entity);
     }
 

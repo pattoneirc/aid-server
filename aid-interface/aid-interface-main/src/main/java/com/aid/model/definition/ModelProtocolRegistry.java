@@ -55,7 +55,6 @@ public class ModelProtocolRegistry {
                     TokenDanceProtocols.TEXT_PROTOCOLS.stream());
             case "audio" -> Stream.concat(audios.stream().map(AudioProviderClient::protocol),
                     Stream.of("tokendance:ark:tts", "tokendance:ark:tts_ws",
-                            "tokendance:minimax:t2a_v2_ws", "tokendance:minimax:voice_clone",
                             TokenDanceProtocols.OPENAI_CHAT_COMPLETIONS));
             default -> {
                 log.info("查询协议的模型类型无效: modelType={}", type);

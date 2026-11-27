@@ -1,0 +1,84 @@
+.canvas-assistant-settings .studio-workspace-modal__body {
+  max-height: min(68dvh, 680px);
+  overflow-y: auto;
+  color: var(--studio-ui-text);
+}
+
+.canvas-assistant-settings__section:not([hidden]) {
+  display: grid;
+  gap: 14px;
+}
+
+.canvas-assistant-settings .ant-segmented {
+  margin-bottom: 16px;
+  padding: 3px;
+  border: 1px solid var(--studio-ui-border);
+  border-radius: 9px;
+  background: var(--studio-ui-control);
+  color: var(--studio-ui-muted);
+}
+
+.canvas-assistant-settings .ant-segmented :is(.ant-segmented-item-selected, .ant-segmented-thumb) {
+  border-radius: 6px;
+  color: var(--studio-ui-text);
+  background: var(--studio-ui-hover);
+}
+
+.canvas-assistant-budget-defaults,
+.canvas-assistant-settings .assistant-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.canvas-assistant-settings :is(p, dl, dd) { margin: 0; }
+.canvas-assistant-settings :is(.canvas-assistant-settings__description, dt, .ant-input-suffix) {
+  color: var(--studio-ui-muted);
+}
+
+.canvas-assistant-settings :is(.canvas-assistant-settings__fields, .canvas-assistant-settings__usage) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.canvas-assistant-settings__fields label { display: grid; gap: 7px; min-width: 0; }
+.canvas-assistant-settings__fields .ant-input-affix-wrapper {
+  min-height: 42px;
+  border-radius: 8px;
+  border-color: var(--studio-ui-border);
+  background: var(--studio-ui-control);
+}
+
+.canvas-assistant-settings .canvas-assistant-settings__usage {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 12px;
+  border: 1px solid var(--studio-ui-border);
+  border-radius: 9px;
+  background: var(--studio-ui-control);
+  overflow-wrap: anywhere;
+}
+
+.canvas-assistant-settings__usage dd { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.canvas-assistant-settings__actions,
+.canvas-assistant-settings__primary-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.canvas-assistant-settings__actions {
+  justify-content: flex-end;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--studio-ui-border);
+}
+
+.canvas-assistant-settings__actions .ant-btn { min-height: 38px; }
+.canvas-assistant-settings__restore { margin-inline-end: auto; }
+.canvas-assistant-settings__feedback[role='alert'] { color: var(--ant-color-error-text, #ff7875); }
+
+@media (max-width: 460px) {
+  .canvas-assistant-settings .canvas-assistant-settings__fields { grid-template-columns: minmax(0, 1fr); }
+}

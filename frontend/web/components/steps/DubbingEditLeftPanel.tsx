@@ -4,10 +4,11 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useId,
   useRef,
   useState
 } from 'react'
-import { Button, Switch, Upload, message } from 'antd'
+import { Button, Upload, message } from 'antd'
 import type { UploadFile, UploadProps } from 'antd'
 import {
   CaretRightOutlined,
@@ -23,7 +24,7 @@ import { BillingQuoteHint } from '~/components/common/BillingQuoteHint'
 import { useBillingQuote } from '~/hooks/useBillingQuote'
 import type { BillingQuoteRequest } from '~/types/business-api'
 import { htmlPlainTextLength, isHtmlContentEmpty } from '~/utils/htmlPlain'
-import { assetUrl } from '~/utils/assetUrl'
+import { userReferenceAudioUploadFile } from '~/utils/business/voice'
 import './DubbingEditLeftPanel.css'
 
 export interface DubbingEditLeftPanelProps {
@@ -41,13 +42,16 @@ export interface DubbingEditLeftPanelProps {
   /** 最近一次试听成功后的音频时长（秒） */
   ttsPreviewDurationSec?: number | null
   billingRequest?: BillingQuoteRequest | null
+  storyboardId?: number
+  projectId: number
+  episodeId: number
   onDialogueChange: (v: string) => void
   onEmotionChange: (v: string) => void
   onLipSyncChange: (v: boolean) => void
   onVoiceNameChange: (v: string) => void
   onPreviewListen: () => void
   onPickVoice: () => void
-  onStartDubbing: (payload: { mode: 'tts' | 'upload'; localFile: File | null }) => void
+  onStartDubbing: (payload: { mode: 'tts' | 'upload'; localFile: File | null; referenceAudioId?: number }) => void
 }
 
 /** 原 defineExpose({ leftTab, getLocalAudioFile }) 契约 */
@@ -84,6 +88,9 @@ export const DubbingEditLeftPanel = forwardRef<
     ttsPreviewPlaying = false,
     ttsPreviewDurationSec = null,
     billingRequest = null,
+    storyboardId,
+    projectId,
+    episodeId,
     onDialogueChange,
     onEmotionChange,
     onLipSyncChange,
@@ -93,6 +100,7 @@ export const DubbingEditLeftPanel = forwardRef<
   },
   ref
 ) {
+  const lipSyncLabelId = useId()
   const EMOTIONS = emotionOptions?.length
     ? emotionOptions
     : ['中性', '开心', '悲伤', '愤怒', '激动']
@@ -119,7 +127,26 @@ export const DubbingEditLeftPanel = forwardRef<
   leftTabRef.current = leftTab
   const [uploadFileList, setUploadFileList] = useState<UploadFile[]>([])
   const localAudioFileRef = useRef<File | null>(null)
-  const [localAudioName, setLocalAudioName] = useState('')
+  const [localFile, setLocalFile] = useState<File | null>(null)
+  const [localAudioUrl, setLocalAudioUrl] = useState('')
+  const [referenceAudioId, setReferenceAudioId] = useState<number>()
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const uploadFlight = useRef<Promise<void> | null>(null)
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+  useEffect(() => {
+    if (!localFile) {
+      setLocalAudioUrl('')
+      return
+    }
+    const url = URL.createObjectURL(localFile)
+    setLocalAudioUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [localFile])
 
   const [dialogueModel, setDialogueModel] = useState(dialogue)
   const dialoguePlainLen = htmlPlainTextLength(dialogueModel)
@@ -130,7 +157,18 @@ export const DubbingEditLeftPanel = forwardRef<
   const dialogueModelRef = useRef(dialogueModel)
   dialogueModelRef.current = dialogueModel
   const [viewportHeight, setViewportHeight] = useState(1080)
-  const dubbingQuote = useBillingQuote(leftTab === 'tts' ? billingRequest : null)
+  const usingRecording = leftTab === 'upload'
+  const needsRecordingQuote = usingRecording && lipSyncModel
+  const request: BillingQuoteRequest | null = usingRecording
+    ? needsRecordingQuote && storyboardId && referenceAudioId
+      ? { quoteType: 'STORYBOARD_LIP_SYNC', payload: { storyboardId, referenceAudioId } }
+      : null
+    : billingRequest
+  const dubbingQuote = useBillingQuote(request)
+  const billingError = usingRecording ? uploadError || dubbingQuote.error : dubbingQuote.error
+  const estimatePending = uploading || dubbingQuote.loading
+  const quoteRequired = !usingRecording || lipSyncModel
+  const quoteReady = Boolean(request && dubbingQuote.quote && !estimatePending && !billingError)
 
   const dubbingEditorHeight = (() => {
     const vp = clamp(viewportHeight, 768, 1400)
@@ -179,15 +217,44 @@ export const DubbingEditLeftPanel = forwardRef<
     onLipSyncChange(v)
   }
 
+  function selectRecording(file: File | null) {
+    localAudioFileRef.current = file
+    uploadFlight.current = null
+    setLocalFile(file)
+    setReferenceAudioId(undefined)
+    setUploadError('')
+    setUploading(false)
+  }
+
   const beforeUploadAudio: UploadProps['beforeUpload'] = (file) => {
-    localAudioFileRef.current = file as unknown as File
-    setLocalAudioName((file as unknown as File).name)
+    selectRecording(file)
     return false
   }
 
+  useEffect(() => {
+    if (!needsRecordingQuote || !localFile || referenceAudioId || uploadError || uploadFlight.current) return
+    const file = localFile
+    const isCurrent = () => mounted.current && localAudioFileRef.current === file
+    const register = async () => {
+      setUploading(true)
+      try {
+        const recording = await userReferenceAudioUploadFile(file, projectId, episodeId)
+        if (isCurrent()) setReferenceAudioId(recording.id)
+      } catch (e) {
+        const error = e as { msg?: string; message?: string }
+        if (isCurrent()) setUploadError(error.msg || error.message || '录音登记失败，请重试。')
+      } finally {
+        if (isCurrent()) {
+          uploadFlight.current = null
+          setUploading(false)
+        }
+      }
+    }
+    uploadFlight.current = register()
+  }, [episodeId, localFile, needsRecordingQuote, projectId, referenceAudioId, uploadError])
+
   function onRemoveUpload() {
-    localAudioFileRef.current = null
-    setLocalAudioName('')
+    selectRecording(null)
   }
 
   function onStartDubbingClick() {
@@ -196,7 +263,11 @@ export const DubbingEditLeftPanel = forwardRef<
         message.warning('请先上传音频文件')
         return
       }
-      onStartDubbing({ mode: 'upload', localFile: localAudioFileRef.current })
+      onStartDubbing({
+        mode: 'upload',
+        localFile: localAudioFileRef.current,
+        ...(lipSyncModel ? { referenceAudioId } : {})
+      })
       return
     }
     if (isHtmlContentEmpty(dialogueModelRef.current)) {
@@ -364,8 +435,9 @@ export const DubbingEditLeftPanel = forwardRef<
               <p className="ant-upload-text">点击或拖拽音频文件到此区域</p>
               <p className="ant-upload-hint">支持常见音频格式，将用于本段分镜配音</p>
             </Upload.Dragger>
-            {localAudioName ? (
-              <p className="dubbing-upload-name">已选：{localAudioName}</p>
+            {localAudioUrl ? (
+              <audio className="dubbing-recording-player" controls preload="metadata" src={localAudioUrl}
+                aria-label="试听本地录音" />
             ) : null}
           </div>
         )}
@@ -373,23 +445,44 @@ export const DubbingEditLeftPanel = forwardRef<
 
       <div className="dubbing-bottom-actions">
         <div className="dubbing-lip-row">
-          <span className="dubbing-lip-label">对口型</span>
-          <Switch checked={lipSyncModel} onChange={(v) => updateLipSyncModel(v)} />
+          <span className="dubbing-lip-label" id={lipSyncLabelId}>对口型</span>
+          <button
+            type="button"
+            className="dubbing-lip-switch"
+            role="switch"
+            aria-labelledby={lipSyncLabelId}
+            aria-checked={lipSyncModel}
+            onClick={() => updateLipSyncModel(!lipSyncModel)}
+          >
+            <span className="dubbing-lip-switch__track" aria-hidden="true" />
+          </button>
         </div>
-        <BillingQuoteHint
-          quote={dubbingQuote.quote}
-          loading={dubbingQuote.loading}
-          error={dubbingQuote.error}
-          active={leftTab === 'tts' && Boolean(billingRequest)}
-          className="billing-quote-hint--submit"
-        />
+        {billingError ? (
+          <div className="workflow-quote-error" role="status">
+            {billingError}{' '}
+            <button type="button" onClick={() => uploadError ? setUploadError('') : dubbingQuote.refresh()}>
+              {uploadError ? '重试上传' : '重新报价'}
+            </button>
+          </div>
+        ) : (
+          <BillingQuoteHint
+            quote={dubbingQuote.quote}
+            loading={dubbingQuote.loading}
+            active={Boolean(request) || needsRecordingQuote}
+            idleText={needsRecordingQuote
+              ? (uploading ? '正在上传录音…' : '上传录音后显示对口型报价')
+              : ''}
+            className="billing-quote-hint--submit"
+          />
+        )}
         <Button
           type="primary"
           size="large"
           className="dubbing-start-btn"
+          disabled={(usingRecording && !localFile) || (quoteRequired && !quoteReady)}
           onClick={onStartDubbingClick}
         >
-          开始配音
+          {needsRecordingQuote ? '开始对口型' : usingRecording ? '使用本地配音' : '开始配音'}
         </Button>
       </div>
     </div>

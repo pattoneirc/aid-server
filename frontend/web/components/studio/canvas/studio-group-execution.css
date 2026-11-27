@@ -1,0 +1,36 @@
+.studio-group-execution__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+
+.studio-group-execution__list {
+  max-height: min(420px, 55dvh);
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.studio-group-execution__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--studio-border-subtle, currentColor);
+  overflow-wrap: anywhere;
+}
+
+.studio-group-execution__name {
+  font-weight: 600;
+}
+
+.studio-group-execution__reason {
+  margin-top: 3px;
+  font-size: 12px;
+}

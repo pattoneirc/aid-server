@@ -94,5 +94,8 @@ func writeRegularFile(r io.Reader, target string, mode os.FileMode, size int64) 
 	if written != size {
 		return fmt.Errorf("文件大小不完整")
 	}
+	if err := out.Chmod(mode.Perm()); err != nil {
+		return fmt.Errorf("设置解包文件权限失败: %w", err)
+	}
 	return nil
 }

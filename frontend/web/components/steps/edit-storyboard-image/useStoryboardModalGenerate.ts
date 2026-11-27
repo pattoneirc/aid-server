@@ -11,7 +11,6 @@ STORYBOARD_IMAGE_GEN_SSE_COMPLETE_EVENT,
 STORYBOARD_IMAGE_GEN_SSE_TERMINAL_EVENT
 } from '~/composables/useStoryboardImageGenerateTask'
 import type { StoryboardRecordRow } from '~/types/business-api'
-import { sortStoryboardImagesForParent } from '~/utils/storyboardImageCover'
 import {
 isModalImageGenUserDismissed,
 readModalImageGenSession
@@ -71,20 +70,6 @@ export function useStoryboardModalGenerate(
     let rows: StoryboardRecordRow[] = []
     try {
       rows = await ctx.fetchImageRecordsForStoryboard(storyboardId)
-      const mapped = ctx.finalizeMappedImagesWhileGenerating(
-        sceneIdx,
-        sortStoryboardImagesForParent(ctx.mapRecordRowsToImageItems(rows, sceneIdx))
-      )
-      const prevImages = ctx.props().scenes[sceneIdx]?.images
-      if (!ctx.isSameStoryboardImageRecordList(mapped, prevImages)) {
-        ctx.emitUpdate(sceneIdx, { images: mapped })
-      }
-      ctx.syncAddedImageIdsFromList(mapped)
-
-      const pendingIdx = mapped.findIndex((m) => m._generating)
-      if (pendingIdx >= 0 && sceneIdx === ctx.currentSceneIndex.get()) {
-        ctx.currentImageIndex.set(pendingIdx)
-      }
     } catch {
       /* 记录拉取失败时仍尝试用 Pinia 中的 taskId 恢复 */
     }
@@ -144,6 +129,7 @@ export function useStoryboardModalGenerate(
     taskId?: number
     storyboardId?: number
     recordId?: number | null
+    recordIds?: number[]
     items?: Array<{ recordId?: number; imageId?: number; storyboardId?: number }>
   }) {
     const taskId = Number(detail?.taskId)
@@ -155,6 +141,8 @@ export function useStoryboardModalGenerate(
       storyboardId = Number(fromItem?.storyboardId)
     }
     if (!Number.isFinite(storyboardId) || storyboardId <= 0) return
+    // The await in the owning modal settles its own task. This event is for external followers.
+    if (activeStoryboardImageFollowStoryboardIds.has(storyboardId)) return
 
     const task = ctx.getModalImageGenTask(storyboardId)
     if (ctx.isDialogueModalTask(task) || ctx.isCanvasOverlayModalTask(task)) return
@@ -170,28 +158,12 @@ export function useStoryboardModalGenerate(
 
     const sceneIdx = ctx.resolveModalImageGenOwnerSceneIdx(storyboardId) ?? session?.sceneIdx
     if (sceneIdx == null || sceneIdx < 0 || !ctx.isModalImageGenOwnerScene(sceneIdx)) return
-    if (
-      !ctx.hasModalImageGenPendingState(storyboardId) &&
-      !activeStoryboardImageFollowStoryboardIds.has(storyboardId)
-    ) {
-      return
-    }
-
-    const recordId =
-      detail?.recordId ??
-      detail?.items?.[detail.items.length - 1]?.recordId ??
-      detail?.items?.[detail.items.length - 1]?.imageId ??
-      null
+    if (!ctx.hasModalImageGenPendingState(storyboardId)) return
 
     ctx.clearModalStoryboardImageLoadingUi(storyboardId, sceneIdx)
-    await ctx.refreshSceneRecords(
-      sceneIdx,
-      recordId != null ? Number(recordId) : undefined,
-      undefined,
-      {
-        force: true
-      }
-    )
+    const items = detail.items?.filter(item => !item.storyboardId || Number(item.storyboardId) === storyboardId)
+    await ctx.refreshSceneRecordsAfterTask(storyboardId,
+      items?.length ? { items } : detail)
   }
 
   function resolveStoryboardIdForImageGenTask(taskId: number): number | null {
@@ -228,6 +200,7 @@ export function useStoryboardModalGenerate(
       storyboardId = Number(resolveStoryboardIdForImageGenTask(taskId) ?? 0)
     }
     if (!Number.isFinite(storyboardId) || storyboardId <= 0) return
+    if (activeStoryboardImageFollowStoryboardIds.has(storyboardId)) return
 
     const task = ctx.getModalImageGenTask(storyboardId)
     if (ctx.isDialogueModalTask(task) || ctx.isCanvasOverlayModalTask(task)) return
@@ -239,16 +212,7 @@ export function useStoryboardModalGenerate(
       !isModalImageGenUserDismissed(storyboardId, ctx.storyboardImageModalSessionScope())
     const taskMatches = task?.taskId === taskId && task?.kind !== 'dialogue'
     const sessionTaskMatches = sessionMatches && session?.taskId === taskId
-    if (
-      !taskMatches &&
-      !sessionTaskMatches &&
-      !activeStoryboardImageFollowStoryboardIds.has(storyboardId) &&
-      !ctx.hasModalImageGenPendingState(storyboardId)
-    ) {
-      ctx.clearStoryboardPanelImageGenerating(storyboardId)
-      ctx.clearModalStoryboardImageGenTaskEverywhere(storyboardId)
-      return
-    }
+    if (!taskMatches && !sessionTaskMatches) return
 
     const sceneIdx = ctx.resolveModalImageGenOwnerSceneIdx(storyboardId) ?? session?.sceneIdx
     if (sceneIdx == null || sceneIdx < 0) {
@@ -258,7 +222,7 @@ export function useStoryboardModalGenerate(
     }
 
     ctx.clearModalStoryboardImageLoadingUi(storyboardId, sceneIdx)
-    await ctx.refreshSceneRecords(sceneIdx)
+    await ctx.refreshSceneRecordsAfterTask(storyboardId, {})
   }
 
   /** 原 onMounted/onUnmounted：监听任意跟进方派发的分镜图 SSE 终态事件 */

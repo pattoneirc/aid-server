@@ -83,31 +83,49 @@ func executeReader(db config.Database, reader io.Reader) error {
 	return nil
 }
 
-// ExecuteDir 按文件名升序执行目录内的 .sql 脚本，返回本次实际执行数量。
-// 通过 aid_schema_history 执行记录表自动判重（Flyway 模式）：
-//   - 同名脚本已成功执行过 → 跳过（重复升级 / 升级包携带旧版本脚本都不会重放）
-//   - 同名但上次失败 → 允许重试
-//   - 同名已成功但内容有变化 → 告警跳过（已生效的历史脚本不重放，修正应放入新脚本）
-func ExecuteDir(db config.Database, dir string) (int, error) {
+// PlanUpgrade selects versioned migrations after the installed release and through
+// the requested release. New installations may have no history rows for SQL
+// whose effects are already included in their initialization snapshot.
+func PlanUpgrade(dir, sourceVersion, targetVersion string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, nil
+			return nil, nil
 		}
-		return 0, fmt.Errorf("读取SQL目录失败: %w", err)
+		return nil, fmt.Errorf("读取SQL目录失败: %w", err)
 	}
+	source := parseMigrationScriptVersion("v" + sourceVersion + ".sql")
+	target := parseMigrationScriptVersion("v" + targetVersion + ".sql")
+	if !source.valid || !target.valid || migrationVersionLess(target, source) {
+		return nil, fmt.Errorf("无法确认增量SQL的升级范围: %q -> %q", sourceVersion, targetVersion)
+	}
+
 	var scripts []string
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".sql") {
-			scripts = append(scripts, entry.Name())
+		name := entry.Name()
+		if !entry.Type().IsRegular() || !strings.HasSuffix(strings.ToLower(name), ".sql") {
+			continue
 		}
-	}
-	if len(scripts) == 0 {
-		return 0, nil
+		version := parseMigrationScriptVersion(name)
+		// Keep the existing behavior for custom, unversioned scripts shipped
+		// in the migration directory. Their execution history still deduplicates them.
+		if version.valid && (!migrationVersionLess(source, version) || migrationVersionLess(target, version)) {
+			continue
+		}
+		scripts = append(scripts, name)
 	}
 	sort.SliceStable(scripts, func(i, j int) bool {
 		return migrationScriptLess(scripts[i], scripts[j])
 	})
+	return scripts, nil
+}
+
+// ExecuteMigrations executes the selected scripts in order. History records
+// prevent retries from replaying scripts that already succeeded.
+func ExecuteMigrations(db config.Database, dir string, scripts []string) (int, error) {
+	if len(scripts) == 0 {
+		return 0, nil
+	}
 
 	if err := ensureHistoryTable(db); err != nil {
 		return 0, err
@@ -192,14 +210,21 @@ func migrationScriptLess(left, right string) bool {
 	if !lv.valid {
 		return left < right
 	}
-	lparts := [...]int{lv.major, lv.minor, lv.patch, lv.channelRank, lv.channelNumber}
-	rparts := [...]int{rv.major, rv.minor, rv.patch, rv.channelRank, rv.channelNumber}
+	if lv == rv {
+		return left < right
+	}
+	return migrationVersionLess(lv, rv)
+}
+
+func migrationVersionLess(left, right migrationScriptVersion) bool {
+	lparts := [...]int{left.major, left.minor, left.patch, left.channelRank, left.channelNumber}
+	rparts := [...]int{right.major, right.minor, right.patch, right.channelRank, right.channelNumber}
 	for index := range lparts {
 		if lparts[index] != rparts[index] {
 			return lparts[index] < rparts[index]
 		}
 	}
-	return left < right
+	return false
 }
 
 // Dump 用 mysqldump 备份数据库到 outFile。
@@ -212,12 +237,22 @@ func Dump(db config.Database, outFile string) error {
 		return fmt.Errorf("创建备份文件失败: %w", err)
 	}
 	defer out.Close()
+	if err := DumpTo(db, out); err != nil {
+		return err
+	}
+	return out.Sync()
+}
 
+// DumpTo writes the same canonical dump for snapshots and state comparison.
+func DumpTo(db config.Database, out io.Writer) error {
 	cmd := buildDBCommand(db, "mysqldump",
 		"--host", db.Host,
 		"--port", fmt.Sprintf("%d", db.Port),
 		"--user", db.User,
 		"--single-transaction",
+		"--skip-dump-date",
+		"--order-by-primary",
+		"--events",
 		"--default-character-set=utf8mb4",
 		"--routines",
 		"--triggers",
@@ -259,7 +294,15 @@ func Restore(db config.Database, dumpFile string) error {
 // 普通 mysqldump 只会覆盖快照中存在的对象，无法删除失败迁移新建的表；直接导入会使
 // schema history 与真实结构脱节。调用方必须确保业务服务已经停止且 dumpFile 已验证存在。
 func RestoreClean(db config.Database, dumpFile string) error {
-	objects, err := runQuery(db, "SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY CASE TABLE_TYPE WHEN 'VIEW' THEN 0 ELSE 1 END, TABLE_NAME")
+	if info, err := os.Stat(dumpFile); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		return fmt.Errorf("数据库快照不可读或为空: %s", dumpFile)
+	}
+	objects, err := runQuery(db, `SELECT object_name, kind FROM (
+		SELECT TABLE_NAME AS object_name, IF(TABLE_TYPE='VIEW','VIEW','TABLE') AS kind, 1 AS sort_key
+		FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()
+		UNION ALL SELECT ROUTINE_NAME, ROUTINE_TYPE, 0 FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE()
+		UNION ALL SELECT EVENT_NAME, 'EVENT', 0 FROM information_schema.EVENTS WHERE EVENT_SCHEMA=DATABASE()
+	) AS snapshot_objects ORDER BY sort_key, kind DESC, object_name`)
 	if err != nil {
 		return fmt.Errorf("读取待恢复数据库对象失败: %w", err)
 	}
@@ -273,9 +316,11 @@ func RestoreClean(db config.Database, dumpFile string) error {
 		if len(fields) != 2 {
 			return fmt.Errorf("无法解析数据库对象清单")
 		}
-		kind := "TABLE"
-		if fields[1] == "VIEW" {
-			kind = "VIEW"
+		kind := fields[1]
+		switch kind {
+		case "TABLE", "VIEW", "PROCEDURE", "FUNCTION", "EVENT":
+		default:
+			return fmt.Errorf("无法识别数据库对象类型")
 		}
 		fmt.Fprintf(&ddl, "DROP %s IF EXISTS %s;\n", kind, quoteIdentifier(fields[0]))
 	}

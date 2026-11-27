@@ -421,7 +421,6 @@
 .studio-composer__assistant { width: 28px; height: 28px; display: grid; place-items: center; color: var(--studio-ui-text, #c5ced8); border: 0; border-radius: 8px; background: var(--studio-ui-control, rgba(255,255,255,.04)); cursor: pointer; }
 .studio-composer__assistant:hover { color: var(--studio-ui-text, #fff); background: var(--studio-ui-hover, rgba(255,255,255,.1)); }
 
-.studio-composer__input-error { margin: 0 0 6px; color: var(--studio-status-fail); font-size: 12px; line-height: 1.4; }
 .studio-composer__credits { color: var(--studio-ui-muted, #939dab); font-size: 10px; white-space: nowrap; }
 .studio-composer__send,
 .studio-composer__cancel { display: inline-flex; height: 28px; align-items: center; justify-content: center; padding: 0; color: var(--studio-text); border: 0; background: transparent; cursor: pointer; }
@@ -1065,6 +1064,71 @@
   width: 100%;
   height: 100%;
 }
+.studio-composer-thumbs__item.is-invalid .studio-composer-thumbs__hit {
+  outline: 1px solid var(--studio-ui-error, #e47772);
+  outline-offset: -1px;
+}
+.studio-composer-thumbs__error {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  color: var(--studio-ui-error, #e47772);
+  background: var(--studio-ui-surface, #24262b);
+  border-radius: 50%;
+  font-size: 13px;
+}
+.studio-composer-reference-errors {
+  flex: 0 0 auto;
+  max-height: 30vh;
+  overflow-y: auto;
+  margin: 3px 0 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--studio-ui-border, #3b3f46);
+  border-inline-start: 2px solid var(--studio-ui-error, #e47772);
+  border-radius: 7px;
+  background: var(--studio-ui-control, rgba(128, 128, 128, .07));
+  color: var(--studio-ui-text, #eceef2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.studio-composer-reference-errors__heading {
+  font-weight: 600;
+}
+.studio-composer-reference-errors__heading .anticon {
+  color: var(--studio-ui-error, #e47772);
+}
+.studio-composer-reference-errors ul {
+  margin: 3px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.studio-composer-reference-errors li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+.studio-composer-reference-errors li + li {
+  border-top: 1px solid var(--studio-ui-border, #3b3f46);
+}
+.studio-composer-reference-errors button {
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.studio-composer-reference-errors button:hover,
+.studio-composer-reference-errors button:focus-visible {
+  text-decoration: underline;
+}
+.studio-composer-reference-errors button:disabled {
+  opacity: .55;
+  cursor: default;
+}
 .studio-composer-thumbs__hit {
   width: 100%;
   height: 100%;
@@ -1142,6 +1206,7 @@
   flex: 0 0 44px;
 }
 .studio-composer-reference-card__hit {
+  position: relative;
   width: 100%;
   height: 100%;
   display: grid;
@@ -1172,6 +1237,13 @@
   background: var(--studio-ui-surface, rgba(0, 0, 0, .55));
   color: var(--studio-ui-text, #fff);
   font-size: 9px;
+}
+.studio-composer-reference-card__cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
 }
 .studio-composer-reference-card__hit > i {
   display: grid;

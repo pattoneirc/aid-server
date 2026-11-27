@@ -2,13 +2,11 @@
  * 音色库 新增/编辑 弹窗
  *
  * 需求背景（v2.39.x）：
- * - 后端 VoiceLibraryBusinessServiceImpl.rejectIfSyncOnlyProvider 会拒绝对 MiniMax 服务商的音色做手工 add/update，
- *   因为 MiniMax 音色必须走"同步音色"按钮（否则会被同步覆盖/软删）。
  *   所以前端在弹窗打开时就做服务商判断，提示运营走同步入口，而不是等保存再报错。
  * - avatarUrl / sampleUrl 必须 http(s):// 开头（Vue 版已做拦截；React 版早期漏掉）。
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Col, DatePicker, Form, Input, InputNumber, Modal, Radio, Row, Select, Switch } from 'antd';
+import { Col, DatePicker, Form, Input, InputNumber, Modal, Radio, Row, Select, Switch } from 'antd';
 import dayjs from 'dayjs';
 import SectionTitle from '@/components/SectionTitle';
 import { LANGUAGE_OPTIONS, GENDER_OPTIONS, AGE_RANGE_OPTIONS, isNeverOffline, parseModelEmotions, resolveEmotionLabel } from './constants';
@@ -48,14 +46,6 @@ export default function VoiceFormDialog({ open, title, data, providerOpts, model
     const model = modelOpts.find((m: any) => m.id === selectedModelId);
     return parseModelEmotions(model?.capabilityJson).map((code) => ({ label: resolveEmotionLabel(code), value: code }));
   }, [modelOpts, selectedModelId]);
-
-  // 当前选中的服务商是否是"仅同步维护"的服务商（目前只 MiniMax 命中）
-  // 与后端 VoiceLibraryBusinessServiceImpl.rejectIfSyncOnlyProvider 保持一致
-  const isSyncOnlyProvider = useMemo(() => {
-    if (!providerFilter) return false;
-    const p = providerOpts.find((x: any) => x.id === providerFilter);
-    return (p?.providerCode || '').trim().toLowerCase() === 'minimax';
-  }, [providerFilter, providerOpts]);
 
   useEffect(() => {
     if (!open) return;
@@ -121,19 +111,8 @@ export default function VoiceFormDialog({ open, title, data, providerOpts, model
       width={900}
       destroyOnClose
       maskClosable={false}
-      okButtonProps={{ disabled: isSyncOnlyProvider }}
     >
       <Form form={form} layout="vertical" style={{ marginTop: 8, maxHeight: '65vh', overflowY: 'auto', paddingRight: 8 }}>
-        {isSyncOnlyProvider && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message='MiniMax 音色仅支持通过"同步音色"维护'
-            description='后端禁止手动新增/编辑 MiniMax 服务商下的音色，否则同步会覆盖你的改动。请前往 AI 管理 → 对应服务商 → 点击"同步音色"。'
-          />
-        )}
-
         {/* 1 归属 */}
         <SectionTitle title="归属信息" />
         <Row gutter={16}>

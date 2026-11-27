@@ -133,7 +133,7 @@ import { canvasQuoteConnected, canvasQuoteIdentity } from '@/utils/canvas/canvas
 import { studioNodeToComposerRef } from '@/utils/studio/studioReferencePicker'
 import { handleSseErrorRecharge } from '@/utils/api'
 import {
-  buildCanvasGenerationReferences,
+  assertCanvasReferenceTransport, buildCanvasGenerationReferences,
   buildCanvasGenerationRequest,
   buildCanvasTextNodeReferences,
   canvasGenerationReferenceRole,
@@ -187,6 +187,18 @@ type CanvasSnapshotRequest = {
   allowDuringLocalGeneration: boolean
 }
 
+export type CanvasNodeGenerationResult =
+  | { status: 'completed' }
+  | { status: 'accepted'; reason?: string; recoveryError?: unknown }
+  | { status: 'blocked'; reason: string }
+
+type CanvasNodeGenerationOptions = {
+  sessionId?: string
+  imageUpscale?: { sourceNodeId: string; modelCode: string; sourceWidth: number; sourceHeight: number; scale: 2 | 4 | 6 }
+  imageEdit?: CanvasImageEditInput
+  videoTool?: CanvasVideoToolInput
+}
+
 export interface CanvasProjectWorkspaceRuntime {
   getNodeVersion: (nodeId: string) => number | null
   refreshWorkspace: () => Promise<void>
@@ -228,12 +240,8 @@ export interface CanvasProjectWorkspaceRuntime {
   resolveResourceReference: (ref: StudioComposerRef, options?: { isCurrent?: () => boolean }) => Promise<CanvasResource>
   prepareLayerSplitSource: (nodeId: string) => Promise<{ resourceId: string; expectedVersion: number }>
   transferResource: (resourceId: string, assetName: string) => Promise<void>
-  generateNode: (kind: UserGenerationKind, nodeId: string, prompt: string, options?: {
-    sessionId?: string
-    imageUpscale?: { sourceNodeId: string; modelCode: string; sourceWidth: number; sourceHeight: number; scale: 2 | 4 | 6 }
-    imageEdit?: CanvasImageEditInput
-    videoTool?: CanvasVideoToolInput
-  }) => Promise<boolean>
+  generateNode: (kind: UserGenerationKind, nodeId: string, prompt: string, options?: CanvasNodeGenerationOptions) => Promise<boolean>
+  generateNodeResult: (kind: UserGenerationKind, nodeId: string, prompt: string, options?: CanvasNodeGenerationOptions) => Promise<CanvasNodeGenerationResult>
   loadNodeHistory: (nodeId: string, pageNum?: number) => Promise<CanvasTaskHistory>
   selectNodeResult: (nodeId: string, resultId: string) => Promise<void>
   applyNodeTextResult: (nodeId: string, taskId: string, inputObjectVersion: number, textContent: string) => Promise<void>
@@ -361,7 +369,7 @@ export function useCanvasProjectWorkspace(
   const transferRequestKeysRef = useRef(new Map<string, string>())
   const transferPromisesRef = useRef(new Map<string, Promise<void>>())
   const pendingAuthoritativeReloadRef = useRef(false)
-  const generationPromisesRef = useRef(new Map<string, Promise<boolean>>())
+  const generationPromisesRef = useRef(new Map<string, Promise<CanvasNodeGenerationResult>>())
   // Ref cleanup follows the terminal node render; notify composer consumers after it.
   const [generationBusyRevision, setGenerationBusyRevision] = useState(0)
   const imageSplitPromisesRef = useRef(new Map<string, Promise<CanvasImageSplitResult>>())
@@ -1595,38 +1603,30 @@ export function useCanvasProjectWorkspace(
     return promise
   }, [])
 
-  const generateNode = useCallback((kind: UserGenerationKind, nodeId: string, prompt: string, generationOptions?: {
-    sessionId?: string
-    imageUpscale?: { sourceNodeId: string; modelCode: string; sourceWidth: number; sourceHeight: number; scale: 2 | 4 | 6 }
-    imageEdit?: CanvasImageEditInput
-    videoTool?: CanvasVideoToolInput
-  }): Promise<boolean> => {
+  const generateNodeResult = useCallback((kind: UserGenerationKind, nodeId: string, prompt: string, generationOptions?: CanvasNodeGenerationOptions): Promise<CanvasNodeGenerationResult> => {
     void requestStudioDesktopNotificationPermission()
     const running = generationPromisesRef.current.get(nodeId)
     if (running) return running
 
-    const holder: { promise?: Promise<boolean> } = {}
+    const holder: { promise?: Promise<CanvasNodeGenerationResult> } = {}
+    const scopeKey = useStudioUiStore.getState().scopeKey
     let generationLease: CanvasNodeEditLease | null = null
     let leaseHandedOff = false
     let accepted = false
-    const promise = (async () => {
+    const promise = (async (): Promise<CanvasNodeGenerationResult> => {
       const detail = projectRef.current
       const workspaceId = workspaceIdRef.current
       if (!detail || !workspaceId || detail.roleCode === 'VIEWER') {
-        antdMessage.warning('当前画布不可生成')
-        return false
+        return { status: 'blocked', reason: '当前画布不可生成' }
       }
       if (!canUseFeature('canvas.generate')) {
-        antdMessage.warning('当前账号没有画布生成权限')
-        return false
+        return { status: 'blocked', reason: '当前账号没有画布生成权限' }
       }
       if (!canUseFeature('canvas.collaborate')) {
-        antdMessage.warning('当前账号没有画布协作权限，无法建立生成会话')
-        return false
+        return { status: 'blocked', reason: '当前账号没有画布协作权限，无法建立生成会话' }
       }
       if (activeTaskNodeIdsRef.current.has(nodeId)) {
-        antdMessage.info('该节点已有进行中的生成任务')
-        return false
+        return { status: 'blocked', reason: '该节点已有进行中的生成任务' }
       }
       const initialNode = useStudioUiStore.getState().nodes.find((item) => item.id === nodeId)
       if (!initialNode) throw new Error('目标节点不存在')
@@ -1647,7 +1647,6 @@ export function useCanvasProjectWorkspace(
       if (initialNode.data.prompt !== nodePrompt) {
         useStudioUiStore.getState().updateNodeData(nodeId, { prompt: nodePrompt })
       }
-      const scopeKey = useStudioUiStore.getState().scopeKey
       updateCanvasNodeRuntime(scopeKey, nodeId, { status: 'queued', errorMessage: undefined })
       const sessionId = await waitForSession()
       if (workspaceIdRef.current !== workspaceId || stoppedRef.current) throw new Error('画布已切换，请重新发送')
@@ -1819,8 +1818,7 @@ export function useCanvasProjectWorkspace(
       for (const ref of upscale || imageEdit ? [] : generationRefs) {
         if (ref.kind === 'library' && ref.mediaKind === 'text') continue
         if (ref.inputError) throw new Error(ref.inputError)
-        if (kind === 'image' && ref.mediaKind !== 'image' && !(ref.mediaKind === 'text' && ref.nodeId)) continue
-        if (kind === 'video' && !['image', 'video', 'audio'].includes(ref.mediaKind) && !(ref.mediaKind === 'text' && ref.nodeId)) continue
+        if (!(ref.mediaKind === 'text' && ref.nodeId)) assertCanvasReferenceTransport(kind, ref.mediaKind.toUpperCase(), ref.title)
         if (ref.nodeId && ref.mediaKind === 'text') {
           const source = allNodes.find((item) => item.id === ref.nodeId)
           const sourceObject = baselineRef.current.get(ref.nodeId)
@@ -1936,7 +1934,10 @@ export function useCanvasProjectWorkspace(
           const values = audioParametersWithPrompt(cap.audio, audioParametersWithFiles(node.data.generationOptions?.audioParameters ?? {}, node.data.generationOptions?.audioFiles, id => resourcesRef.current.get(id)?.resourceUrl), prompt)
           if (Object.keys(audioParameterErrors(cap.audio, values)).length) throw new Error('请完善音频参数')
           capabilityCode = cap.code
-        } else capabilityCode = selected.capabilityCode || undefined
+        } else {
+          capabilityCode = selected.capabilityCode || undefined
+          validateCanvasGenerationReferenceLimits(selected, capabilityCode ?? '', prepared.references, candidates)
+        }
       }
       if (kind === 'audio') {
         for (const id of node.data.generationOptions?.audioResourceIds ?? []) {
@@ -2128,7 +2129,7 @@ export function useCanvasProjectWorkspace(
             clearRun()
             await applyAuthoritativeSnapshot(detail, true).catch(() => undefined)
             antdMessage.info('生成请求已受理，正在恢复任务')
-            return true
+            return { status: 'accepted' }
           } else {
             throw submitError
           }
@@ -2164,17 +2165,19 @@ export function useCanvasProjectWorkspace(
         })
 
         const tracker = taskTrackerRef.current
-        if (!tracker) return true
+        if (!tracker) return { status: 'accepted' }
         const latest = await tracker.follow(taskId, nodeId, response.task, Boolean(textStream && !streamFinished))
-        if (!latest) return true
+        if (!latest) return { status: 'accepted' }
 
-        if (unreconciledTerminalTaskIdsRef.current.delete(taskId)) return true
+        if (unreconciledTerminalTaskIdsRef.current.delete(taskId)) {
+          return { status: 'accepted', reason: '任务已结束，结果尚未同步，请查看节点历史' }
+        }
 
         const finalStatus = String(latest.status || '').toUpperCase()
         const canNotify = finalStatus === 'SUCCEEDED' && isNotifiableStudioGenerationSuccess(kind, latest)
         if (stoppedRef.current || workspaceIdRef.current !== workspaceId) {
           if (canNotify) notifyStudioGenerationComplete(noticeTask)
-          return true
+          return { status: 'accepted' }
         }
 
         if (finalStatus !== 'SUCCEEDED') {
@@ -2203,7 +2206,7 @@ export function useCanvasProjectWorkspace(
             updatedAt: new Date().toISOString()
           })
           clearRun()
-          return true
+          return { status: 'completed' }
         }
 
         if (kind === 'text' && !String(latest.textContent ?? '').trim()) {
@@ -2215,7 +2218,7 @@ export function useCanvasProjectWorkspace(
         clearRun()
         antdMessage.success(studioGenerationCompleteNotice(noticeTask).toastTitle)
         notifyStudioGenerationComplete(noticeTask)
-        return true
+        return { status: 'completed' }
       } catch (error: unknown) {
         if (!terminalSucceeded && live()) {
           const failure = apiErrorMessage(error, '生成失败')
@@ -2233,6 +2236,9 @@ export function useCanvasProjectWorkspace(
         }
         if (!accepted && !isCanvasGenerationResponseUnknown(error)) canvasRetryLedger.clear(generationScope, fingerprint)
         clearRun()
+        if (accepted && !terminalFailed && !terminalSucceeded) {
+          return { status: 'accepted', reason: '任务已受理，状态暂时无法查询', recoveryError: error }
+        }
         throw error
       } finally {
         if (!accepted) ownOperationIdsRef.current.delete(clientRequestId)
@@ -2240,8 +2246,8 @@ export function useCanvasProjectWorkspace(
     })().catch((error: unknown) => {
       const state = useStudioUiStore.getState()
       const current = state.nodes.find((item) => item.id === nodeId)
-      if (current?.data.status === 'queued') {
-        updateCanvasNodeRuntime(state.scopeKey, nodeId, {
+      if (state.scopeKey === scopeKey && current?.data.status === 'queued') {
+        updateCanvasNodeRuntime(scopeKey, nodeId, {
           status: 'failed',
           errorMessage: apiErrorMessage(error, '生成失败')
         })
@@ -2271,6 +2277,16 @@ export function useCanvasProjectWorkspace(
     generationPromisesRef.current.set(nodeId, promise)
     return promise
   }, [applyAuthoritativeSnapshot, canUseFeature, performSave, releaseDeferredNodePosition, waitForSession])
+
+  const generateNode = useCallback<CanvasProjectWorkspaceRuntime['generateNode']>(async (...args) => {
+    const result = await generateNodeResult(...args)
+    if (result.status === 'blocked') {
+      antdMessage.warning(result.reason)
+      return false
+    }
+    if (result.status === 'accepted' && 'recoveryError' in result) throw result.recoveryError
+    return true
+  }, [generateNodeResult])
 
   const loadNodeHistory = useCallback(async (nodeId: string, pageNum = 1) => {
     if (!workspaceIdRef.current) throw new Error('工作区尚未载入')
@@ -2413,6 +2429,9 @@ export function useCanvasProjectWorkspace(
           resource = await register({ workspaceId, sourceType: 'MEDIA_TASK', sourceId: taskId })
         }
       }
+    }
+    if (!resource && ref.kind === 'asset' && ref.personalAudioAssetId) {
+      resource = await register({ workspaceId, sourceType: 'AUDIO_ASSET', sourceId: ref.personalAudioAssetId })
     }
     if (!resource && /^\d+$/.test(knownId) && knownId !== '0' && (ref.kind === 'asset' || ref.kind === 'library')) {
       resource = await register({ workspaceId, sourceType: ref.kind === 'library' ? 'OFFICIAL_ASSET' : ref.sourceCategoryCode ? 'ASSET_CENTER' : 'USER_ASSET', sourceId: knownId,
@@ -2850,6 +2869,7 @@ export function useCanvasProjectWorkspace(
     prepareLayerSplitSource,
     transferResource,
     generateNode,
+    generateNodeResult,
     loadNodeHistory,
     selectNodeResult,
     applyNodeTextResult,
@@ -2861,5 +2881,5 @@ export function useCanvasProjectWorkspace(
     invokeMember,
     observeRun,
     adoptRun
-  }), [nodeEditLockOwner, acquireNodeEditLease, acquireNodeMutationLease, adoptRun, applyNodeDraft, applyNodeTextResult, canUseFeature, collaboration, collaborationError, collaborationRecoverable, collaborationStatus, connected, copyNodes, deleteNodeDraft, deleteNodes, entitlements, generateNode, getNodeVersion, importNodeText, invokeMember, isNodeBusy, loadDrafts, loadNodeHistory, mergeImageLayers, nodeResources, observeRun, resourceById, prepareGenerationQuote, prepareLayerSplitSource, project, refreshCollaboration, refreshProject, refreshWorkspace, releaseGenerationNode, reserveGenerationNode, resolveResourceReference, retainCanvasCollaboration, retryCollaboration, saveNodeDraft, saveNow, selectNodeResult, splitImage, splitImageRegion, transferResource, undoAvailable, undoLast, uploadResource])
+  }), [nodeEditLockOwner, acquireNodeEditLease, acquireNodeMutationLease, adoptRun, applyNodeDraft, applyNodeTextResult, canUseFeature, collaboration, collaborationError, collaborationRecoverable, collaborationStatus, connected, copyNodes, deleteNodeDraft, deleteNodes, entitlements, generateNode, generateNodeResult, getNodeVersion, importNodeText, invokeMember, isNodeBusy, loadDrafts, loadNodeHistory, mergeImageLayers, nodeResources, observeRun, resourceById, prepareGenerationQuote, prepareLayerSplitSource, project, refreshCollaboration, refreshProject, refreshWorkspace, releaseGenerationNode, reserveGenerationNode, resolveResourceReference, retainCanvasCollaboration, retryCollaboration, saveNodeDraft, saveNow, selectNodeResult, splitImage, splitImageRegion, transferResource, undoAvailable, undoLast, uploadResource])
 }

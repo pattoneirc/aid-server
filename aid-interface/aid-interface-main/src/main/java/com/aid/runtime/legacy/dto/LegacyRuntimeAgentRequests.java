@@ -91,6 +91,7 @@ public final class LegacyRuntimeAgentRequests {
         @Valid @Size(max = 8) private List<@NotNull Step> steps = new ArrayList<>();
     }
 
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data public static class DraftSave extends DraftPayload {
         @Positive private Long draftId;
         @Pattern(regexp = "[0-9a-f]{64}") private String draftDigest;

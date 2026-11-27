@@ -10,7 +10,10 @@ import { uploadImageToOssWithToast, uploadVideoToOssWithToast } from '@/utils/os
 import { appendComposerRefInstance, replaceStudioVideoReference } from '@/utils/studio/studioComposerRefs'
 import { useCanvasProjectRuntime } from '@/components/studio/free/CanvasProjectRuntimeContext'
 
-export function StudioComposerUploadButton({ node }: { node: StudioCanvasNode }) {
+export function StudioComposerUploadButton({ node, replaceRef }: {
+  node: StudioCanvasNode
+  replaceRef?: Pick<StudioComposerRef, 'id' | 'assetId' | 'previewUrl'>
+}) {
   const canvasRuntime = useCanvasProjectRuntime()
   const inputRef = useRef<HTMLInputElement>(null)
   const inFlight = useRef(false)
@@ -18,7 +21,7 @@ export function StudioComposerUploadButton({ node }: { node: StudioCanvasNode })
   const updateNodeData = useStudioUiStore((state) => state.updateNodeData)
   const [progress, setProgress] = useState<number | null>(null)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
-  const accept = node.data.kind === 'video'
+  const accept = replaceRef ? 'image/jpeg,image/png,image/webp' : node.data.kind === 'video'
     ? 'image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime'
     : node.data.kind === 'image'
       ? 'image/jpeg,image/png,image/webp'
@@ -78,6 +81,21 @@ export function StudioComposerUploadButton({ node }: { node: StudioCanvasNode })
         sourceKey: `upload:${file.name}:${file.lastModified}`,
         channel: 'attachment'
       }
+      if (replaceRef) {
+        const refs = target.data.composerRefs ?? []
+        const previous = refs.find(ref => ref.id === replaceRef.id)
+        if (!previous || previous.nodeId || previous.assetId !== replaceRef.assetId
+          || previous.previewUrl !== replaceRef.previewUrl) {
+          throw new Error('这张参考图已变化，请重新选择')
+        }
+        updateNodeData(target.id, {
+          composerRefs: refs.map(ref => ref === previous ? { ...ref, ...base } : ref),
+          ...(resource ? { canvasResourceIds: [...new Set([
+            ...(target.data.canvasResourceIds ?? []).map(String), String(resource.resourceId)
+          ])] } : {})
+        })
+        return
+      }
       // Merge with the current refs/options, including edits made during upload.
       const appended = appendComposerRefInstance(target.data.composerRefs, base)
       if (targetKind === 'video') {
@@ -107,11 +125,14 @@ export function StudioComposerUploadButton({ node }: { node: StudioCanvasNode })
 
   return (
     <>
+      {replaceRef ? <button type="button"
+        disabled={progress !== null || !!canvasRuntime && !canvasRuntime.canMutate}
+        onClick={() => inputRef.current?.click()}>{progress == null ? '更换参考图' : '上传中…'}</button> :
       <StudioCanvasTooltip title={canvasRuntime && !canvasRuntime.canMutate ? '当前画布不可编辑，请检查成员权限或协作连接' : progress == null ? '上传素材' : `上传中 ${Math.round(progress)}%`}>
         <button type="button" className="studio-composer__upload" disabled={progress !== null || !!canvasRuntime && !canvasRuntime.canMutate} onClick={() => inputRef.current?.click()} aria-label="上传素材">
           {progress == null ? <PaperClipOutlined /> : <LoadingOutlined spin />}
         </button>
-      </StudioCanvasTooltip>
+      </StudioCanvasTooltip>}
       <input ref={inputRef} hidden type="file" accept={accept} onChange={(event) => { void handleFile(event) }} />
     </>
   )

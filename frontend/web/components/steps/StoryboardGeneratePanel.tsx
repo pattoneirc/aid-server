@@ -196,8 +196,8 @@ export const StoryboardGeneratePanel = forwardRef<
     ref,
     () => ({
       isParamSettingsOpen: () => paramSettingsOpenRef.current,
-      applyParamDraftAssets: (type: PanelSelectModalType, items: any[]) => {
-        paramSettingsModalRef.current?.appendDraftImages(type as any, items)
+      applyParamDraftAssets: (type: PanelSelectModalType, items: any[], syncPrompt?: boolean) => {
+        paramSettingsModalRef.current?.appendDraftImages(type as any, items, syncPrompt)
       },
       applyParamDraftReference: (item: any) => {
         paramSettingsModalRef.current?.appendDraftReferences([item])
@@ -543,10 +543,10 @@ export const StoryboardGeneratePanel = forwardRef<
               onPreview={onStoryboardVideoReferenceThumbClick}
               onOpenAdder={() => props.onImportReference?.()}
             />
-          ) : props.mode === 'imageToVideo' ? (
-            /* 多参生视频：场景/角色/道具参考图导入区 */
+          ) : props.mode === 'imageToVideo' || (props.mode === 'storyboard' && props.onImportReference) ? (
+            /* 分镜图和多参视频共用提示词素材条 */
             <GenerateSourceImagesStrip
-              key="i2v-multi-param"
+              key={props.mode}
               variant="i2v"
               useShimmer
               enablePreview
@@ -670,7 +670,7 @@ export const StoryboardGeneratePanel = forwardRef<
           extraPromptAssets={props.extraPromptAssets}
           onOpenSelectModal={(type) => props.onOpenSelectModal?.(type as PanelSelectModalType)}
           onPreviewAssetImage={(img) => props.onPreviewAssetImage?.(img)}
-          onImportReference={() => props.onImportReference?.()}
+          onImportReference={props.onImportReference}
           onPreviewReference={() => props.onPreviewReference?.()}
           onToggleAssetRef={onDraftToggleAssetRef}
           onSyncAssetRefs={onDraftSyncAssetRefs}

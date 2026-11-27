@@ -1,5 +1,6 @@
 import type { UserModelListItem } from '@/types/business-api'
 import type { StudioCanvasNode } from '@/types/studio'
+import { resolveCapabilityRecord } from '@/utils/modelCapability'
 import {
   canvasVideoCapabilityAvailability,
   canvasVideoNodeLinks,
@@ -23,6 +24,8 @@ export interface CanvasVideoCapabilityChoice {
   code: string
   label: string
   maxReferenceImages?: number
+  supportsReferenceAudio?: boolean
+  referenceAudioRequiresVisualInput?: boolean
 }
 
 export function canvasGenerationCapability(kind: CanvasVisualKind, hasImageReference: boolean): string {
@@ -56,13 +59,24 @@ export function canvasVideoUsesFirstFrame(capability: string): boolean {
 
 export function canvasVideoCapabilityChoices(model?: UserModelListItem | null): CanvasVideoCapabilityChoice[] {
   const seen = new Map<string, CanvasVideoCapabilityChoice>()
-  const add = (code?: string | null, generateMode?: string | null, label?: string | null, maxImages?: unknown) => {
+  const capability = resolveCapabilityRecord(model)
+  const sceneRules = capability.sceneRules as Record<string, Record<string, unknown>> | undefined
+  const add = (code?: string | null, generateMode?: string | null, label?: string | null, presentation?: AvailableCapability['presentation']) => {
     const resolved = canvasVideoCapabilityCode(code, generateMode, label)
     if (!resolved || seen.has(resolved)) return
+    const maxImages = presentation?.maxReferenceImages
     const maxReferenceImages = typeof maxImages === 'number' && Number.isSafeInteger(maxImages) && maxImages > 0 ? maxImages : undefined
-    seen.set(resolved, { code: resolved, label: canvasVideoCapabilityLabel(resolved, label), ...(maxReferenceImages === undefined ? {} : { maxReferenceImages }) })
+    const scene = (generateMode || resolved).replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
+    const settings = { ...capability, ...sceneRules?.[scene], ...presentation }
+    seen.set(resolved, {
+      code: resolved,
+      label: canvasVideoCapabilityLabel(resolved, label),
+      maxReferenceImages,
+      supportsReferenceAudio: settings.supportsReferenceAudio === true,
+      referenceAudioRequiresVisualInput: settings.referenceAudioRequiresVisualInput === true
+    })
   }
-  for (const capability of model?.availableCapabilities ?? []) add(capability.code, capability.generateMode, capability.label, capability.presentation?.maxReferenceImages)
+  for (const option of model?.availableCapabilities ?? []) add(option.code, option.generateMode, option.label, option.presentation)
   add(model?.capabilityCode, model?.generateMode)
   return [...seen.values()]
 }
@@ -125,6 +139,10 @@ export function resolveCanvasVideoCapability(input: {
   const explicit = explicitCode
     ? choices.find((choice) => choice.code === explicitCode) ?? { code: explicitCode, label: canvasVideoCapabilityLabel(explicitCode) }
     : undefined
+  const referenceForAudio = links.audioCount
+    ? choices.find(choice => choice.supportsReferenceAudio && isOmniChoice(choice) && allowed(choice))
+    : undefined
+  if (referenceForAudio && explicit?.code === 'text_to_video') return referenceForAudio.code
   if (explicit && allowed(explicit) && (!choices.length || choices.some((choice) => choice.code === explicit.code))) return explicit.code
   const available = choices.filter(allowed)
   const omni = available.find(isOmniChoice)

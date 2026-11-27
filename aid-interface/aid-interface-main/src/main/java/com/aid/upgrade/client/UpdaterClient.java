@@ -170,6 +170,19 @@ public class UpdaterClient {
     /**
      * 解析升级器健康文件生效路径：配置缺失时回退与部署脚本一致的默认路径，保证零配置可用
      */
+    public JSONObject readVersionBackups() {
+        Path file = Path.of(resolveHealthFilePath()).toAbsolutePath().normalize()
+                .resolveSibling("version-backups.json");
+        try {
+            if (Files.isRegularFile(file)) {
+                return JSONObject.parseObject(Files.readString(file));
+            }
+        } catch (Exception e) {
+            log.warn("读取本机备份列表失败", e);
+        }
+        return new JSONObject();
+    }
+
     private String resolveHealthFilePath() {
         String configured = readUpgradeConfig(UpgradeConfigKeys.KEY_UPDATER_HEALTH_FILE);
         return StrUtil.isBlank(configured) ? UpgradeConfigKeys.DEFAULT_UPDATER_HEALTH_FILE : configured;

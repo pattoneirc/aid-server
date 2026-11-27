@@ -20,8 +20,10 @@ public class RoleVoiceBindRequest
     private Long assetId;
 
     /** 所选音色ID（aid_ai_voice_library.id） */
-    @NotNull(message = "音色不能空")
     private Long voiceLibraryId;
+
+    /** 个人原录音资产 ID，与平台音色 ID 二选一。 */
+    private Long personalAudioAssetId;
 
     /** 可选：覆盖语速（0.50~2.00），null 走音色默认 */
     private BigDecimal overrideSpeed;

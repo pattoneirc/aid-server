@@ -16,7 +16,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * C 端参考音频 Controller。
@@ -43,6 +45,13 @@ public class ReferenceAudioController extends BaseController {
         Long userId = SecurityUtils.getUserId();
         ReferenceAudioVO vo = referenceAudioBusinessService.upload(request, userId);
         return success(vo);
+    }
+
+    @PostMapping("/upload-file")
+    public AjaxResult uploadFile(@RequestParam("file") MultipartFile file,
+                                 @RequestParam("projectId") Long projectId,
+                                 @RequestParam(value = "episodeId", required = false) Long episodeId) {
+        return success(referenceAudioBusinessService.uploadFile(file, projectId, episodeId, SecurityUtils.getUserId()));
     }
 
     /**

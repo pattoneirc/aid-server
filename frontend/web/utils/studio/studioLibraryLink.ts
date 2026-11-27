@@ -1,4 +1,5 @@
-import type { StudioComposerRef, StudioMode, StudioNodeKind } from '@/types/studio'
+import type { StudioCanvasNode, StudioComposerRef, StudioFlowEdge, StudioMode, StudioNodeData, StudioNodeKind } from '@/types/studio'
+import { canvasVideoReferenceAddDisabledReason } from './canvasVideoLinkedNodes'
 import { isStudioMaterialNodeKind, STUDIO_NODE_KIND_ORDER } from './studioNodeKind'
 
 export function canConnectStudioNodes(sourceKind: StudioNodeKind, targetKind: StudioNodeKind): boolean {
@@ -17,6 +18,26 @@ export function studioManualConnectionDisabledReason(sourceKind: StudioNodeKind,
   if (mode === 'free' && sourceKind === 'voice' && targetKind !== 'video' && targetKind !== 'smart_edit') return '音频节点只能连接视频或剪辑成片节点'
   if (canConnectStudioNodes(sourceKind, targetKind)) return undefined
   return targetKind === 'smart_edit' ? '剪辑成片只接收图片、视频或音频节点' : '风格库与官方素材只能连接图片节点'
+}
+
+type StudioConnectionEndpoint = { id?: string; data: Pick<StudioNodeData, 'kind' | 'mediaKind' | 'composerRefs'> }
+type StudioConnectionGraph = { studioMode: StudioMode; nodes: readonly StudioCanvasNode[]; edges: readonly StudioFlowEdge[] }
+
+export function studioConnectedVideoDisabledReason(
+  source: StudioConnectionEndpoint, target: StudioConnectionEndpoint, graph: StudioConnectionGraph
+): string | undefined {
+  if (graph.studioMode !== 'free' || target.data.kind !== 'video' || !target.id
+    || (source.data.kind !== 'video' && source.data.mediaKind !== 'video')) return undefined
+  return canvasVideoReferenceAddDisabledReason({
+    node: { id: target.id, data: target.data }, nodes: graph.nodes, edges: graph.edges
+  }, source.id)
+}
+
+export function studioManualNodeConnectionDisabledReason(
+  source: StudioConnectionEndpoint, target: StudioConnectionEndpoint, graph: StudioConnectionGraph
+): string | undefined {
+  return studioManualConnectionDisabledReason(source.data.kind, target.data.kind, graph.studioMode)
+    || studioConnectedVideoDisabledReason(source, target, graph)
 }
 
 export function allowedStudioConnectionKinds(anchorKind?: StudioNodeKind, role: 'source' | 'target' = 'source', mode: StudioMode = 'free'): StudioNodeKind[] {

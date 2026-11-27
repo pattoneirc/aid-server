@@ -100,7 +100,7 @@ import {
   STUDIO_CANVAS_SELECTION_KEY,
   STUDIO_CANVAS_ZOOM_KEY
 } from '@/utils/studio/studioCanvasShortcuts'
-import { allowedStudioConnectionKinds, studioManualConnectionDisabledReason } from '@/utils/studio/studioLibraryLink'
+import { allowedStudioConnectionKinds, studioConnectedVideoDisabledReason, studioManualNodeConnectionDisabledReason } from '@/utils/studio/studioLibraryLink'
 import { createStudioConnectionTargetMotion } from '@/utils/studio/studioConnectionTargetMotion'
 import { boundsOfStudioRects, findStudioAlignment, type StudioAlignmentRect } from '@/utils/studio/studioAlignment'
 import { studioReferencePickDisabledReason } from '@/utils/studio/studioReferencePicker'
@@ -932,23 +932,21 @@ function StudioCanvasInner({
 
   const handleConnect = useCallback((connection: Connection) => {
     if (readOnly) return
-    const source = nodes.find((node) => node.id === connection.source)
-    const target = nodes.find((node) => node.id === connection.target)
-    const reason = source && target ? studioManualConnectionDisabledReason(source.data.kind, target.data.kind, studioMode) : undefined
+    const reason = addConnection(connection, edgeKind)
     if (reason) {
       message.warning(reason)
       return
     }
-    addConnection(connection, edgeKind)
     setFloatingMenu(null)
-  }, [addConnection, edgeKind, nodes, readOnly, studioMode])
+  }, [addConnection, edgeKind, readOnly])
 
   const isValidConnection = useCallback((connection: Pick<Connection, 'source' | 'target'>) => {
     if (readOnly || !connection.source || connection.source === connection.target) return false
-    const source = nodes.find(node => node.id === connection.source)
-    const target = nodes.find(node => node.id === connection.target)
-    return Boolean(source && target && !studioManualConnectionDisabledReason(source.data.kind, target.data.kind, studioMode))
-  }, [nodes, readOnly, studioMode])
+    const state = useStudioUiStore.getState()
+    const source = state.nodes.find(node => node.id === connection.source)
+    const target = state.nodes.find(node => node.id === connection.target)
+    return Boolean(source && target && !studioManualNodeConnectionDisabledReason(source, target, state))
+  }, [readOnly])
 
   const handleConnectStart: OnConnectStart = useCallback((_event, params) => {
     if (studioMode === 'free' && !readOnly) connectionMotionRef.current?.start(params.nodeId)
@@ -963,22 +961,16 @@ function StudioCanvasInner({
     const fromTarget = state.fromHandle?.type === 'target'
     const client = pointerFromEvent(event, state)
     const flow = screenToFlowPosition(client)
-    const hit = findStudioNodeAtCanvasPosition(nodes, groups, flow)
+    const hit = nodes.find(node => node.id === state.toNode?.id) ?? findStudioNodeAtCanvasPosition(nodes, groups, flow)
     if (hit && hit.id !== state.fromNode.id) {
       const source = fromTarget ? hit : from
       const target = fromTarget ? from : hit
-      const reason = studioManualConnectionDisabledReason(source.data.kind, target.data.kind, studioMode)
-      if (reason) {
-        message.warning(reason)
-        return
-      }
-      addConnection({
+      handleConnect({
         source: source.id,
         target: target.id,
         sourceHandle: null,
         targetHandle: null
-      }, edgeKind)
-      setFloatingMenu(null)
+      })
       setContextMenu(null)
       return
     }
@@ -998,7 +990,7 @@ function StudioCanvasInner({
       mode: 'add-only'
     })
     setContextMenu(null)
-  }, [addConnection, edgeKind, groups, nodes, readOnly, screenToFlowPosition, studioMode])
+  }, [groups, handleConnect, nodes, readOnly, screenToFlowPosition, studioMode])
 
   const importCanvasFile = useCallback((file: File, position: XYPosition) => {
     const scopeKey = useStudioUiStore.getState().scopeKey
@@ -1109,10 +1101,12 @@ function StudioCanvasInner({
       message.info('流程画布不支持手动添加节点')
       return
     }
-    const anchor = nodes.find(node => node.id === floatingMenu.sourceId)
+    const state = useStudioUiStore.getState()
+    const anchor = state.nodes.find(node => node.id === floatingMenu.sourceId)
+    const endpoint = { data: { kind } }
     const reason = anchor && (floatingMenu.connectionRole === 'target'
-      ? studioManualConnectionDisabledReason(kind, anchor.data.kind, studioMode)
-      : studioManualConnectionDisabledReason(anchor.data.kind, kind, studioMode))
+      ? studioManualNodeConnectionDisabledReason(endpoint, anchor, state)
+      : studioManualNodeConnectionDisabledReason(anchor, endpoint, state))
     if (floatingMenu.sourceId && (!anchor || reason)) {
       if (reason) message.warning(reason)
       setFloatingMenu(null)
@@ -1763,6 +1757,7 @@ function StudioCanvasInner({
       const candidate = nodes.find((item) => item.id === node.id)
       if (!target || !candidate) return
       const disabledReason = studioReferencePickDisabledReason(target, candidate)
+        || studioConnectedVideoDisabledReason(candidate, target, useStudioUiStore.getState())
       if (disabledReason) {
         message.info(disabledReason)
         return
@@ -2136,8 +2131,8 @@ function StudioCanvasInner({
       {!readOnly && selectionChrome === 'multiSelect' ? (
         <StudioSelectionToolbar ref={selectionToolbarRef} />
       ) : null}
-      {!readOnly && selectionChrome === 'group' ? (
-        <StudioGroupToolbar ref={groupToolbarRef} />
+      {!readOnly ? (
+        <StudioGroupToolbar ref={groupToolbarRef} visible={selectionChrome === 'group'} />
       ) : null}
 
     </div>

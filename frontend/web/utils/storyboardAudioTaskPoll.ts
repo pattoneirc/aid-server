@@ -5,12 +5,10 @@ StoryboardLipSyncAcceptVO,
 StoryboardLipSyncRequest
 } from '~/types/business-api'
 import {
-userModelList,
 userStoryboardAudioTask,
 userStoryboardGenerateAudio,
 userStoryboardLipSync
 } from '~/utils/businessApi'
-import { checkMiniMaxTtsTextLength } from '~/utils/ttsTextLimit'
 /** Legacy polling interval for storyboard audio task APIs. */
 export const STORYBOARD_AUDIO_POLL_INTERVAL_MS = 30_000
 
@@ -97,30 +95,14 @@ export async function pollStoryboardAudioTaskUntil(
 
 /**
  * 发起配音：同步成功直接返回；仅 PROCESSING 时按 30s 间隔轮询终态。
- * MiniMax 音色：清洗后文本 >10000 字前端直接拦截（文案「文本过长」）。
  */
 export async function resolveStoryboardGenerateAudio(
   body: StoryboardGenerateAudioRequest,
   options?: {
     onProgress?: (vo: StoryboardAudioTaskVO) => void
     signal?: AbortSignal
-    /** 可选：已知的 provider / modelCode，用于 MiniMax 字数预检 */
-    ttsProviderHints?: Array<string | null | undefined>
   }
 ): Promise<StoryboardAudioTaskVO> {
-  const hints = [...(options?.ttsProviderHints || [])]
-  if (body.voiceModelId && hints.length === 0) {
-    try {
-      const models = await userModelList({ modelType: 'audio' })
-      const hit = models.find((m) => Number(m.id) === Number(body.voiceModelId))
-      if (hit) hints.push(hit.providerName, hit.modelCode, hit.modelName)
-    } catch {
-      /* ignore lookup failure；仍交由后端校验 */
-    }
-  }
-  const tooLong = checkMiniMaxTtsTextLength(body.ttsText, hints)
-  if (tooLong) throw new Error(tooLong)
-
   const first = await userStoryboardGenerateAudio(body)
   options?.onProgress?.(first)
 

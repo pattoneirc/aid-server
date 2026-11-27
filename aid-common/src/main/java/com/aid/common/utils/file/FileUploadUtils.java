@@ -197,6 +197,13 @@ public class FileUploadUtils
             throw new FileSizeLimitExceededException(DEFAULT_MAX_SIZE / 1024 / 1024);
         }
 
+        assertFileTypeAllowed(file, allowedExtension);
+    }
+
+    /** Checks file extension and signature when upload size is handled by the storage policy. */
+    public static void assertFileTypeAllowed(MultipartFile file, String[] allowedExtension)
+            throws InvalidExtensionException
+    {
         String fileName = file.getOriginalFilename();
         String extension = getExtension(file);
         if (allowedExtension != null && !isAllowedExtension(extension, allowedExtension))

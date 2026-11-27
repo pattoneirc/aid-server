@@ -35,6 +35,7 @@ public final class ArtifactViews {
         private AssistantTargetViews.TargetEffect latestTargetEffect;
     }
 
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data
     public static class Detail extends Summary {
         private Long parentRevision;

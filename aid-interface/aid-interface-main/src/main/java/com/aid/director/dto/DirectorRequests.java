@@ -19,6 +19,7 @@ public final class DirectorRequests {
         public void rejectUnknown(String key, Object value) { throw com.aid.director.DirectorException.invalid(); }
     }
 
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data
     public static class Scope extends Input {
         @NotBlank private String projectId;
@@ -50,6 +51,7 @@ public final class DirectorRequests {
         @Min(1) @Max(100) private int pageSize = 20;
     }
 
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data
     public static class Session extends Input {
         @NotBlank @Size(max = 64) private String sessionId;
@@ -98,6 +100,7 @@ public final class DirectorRequests {
         @NotNull @Min(1) private Long bindingEpoch;
     }
 
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data
     public static class TakeKey extends Input {
         @NotBlank private String takeId;
@@ -111,6 +114,7 @@ public final class DirectorRequests {
         @NotNull @Min(1) private Long contextVersion;
     }
 
+    @lombok.EqualsAndHashCode(callSuper = false)
     @Data
     public static class Sample extends Input {
         @NotNull @Min(0) @com.fasterxml.jackson.annotation.JsonProperty("tMs")

@@ -8,6 +8,8 @@ public class ComposeJobPlan
 {
     private Long taskId;
     private String resolution;
+    private Integer outputWidth;
+    private Integer outputHeight;
     private String codec;
     private String outputObjectPath;
     private ComposeTracks tracks;

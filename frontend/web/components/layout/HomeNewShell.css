@@ -31,6 +31,8 @@
   flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 细滚动条出现和消失都会改变内容宽度。槽位始终留出，切换案例广场标签时主区域不再左右抽动。 */
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   position: relative;

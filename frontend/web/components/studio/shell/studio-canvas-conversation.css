@@ -22,10 +22,6 @@
   gap: 3px;
 }
 
-.canvas-assistant-budget-defaults { display: grid; gap: 12px; }
-.canvas-assistant-budget-defaults label { display: grid; gap: 4px; }
-.canvas-assistant-budget-defaults > div { display: flex; flex-wrap: wrap; gap: 8px; }
-
 .canvas-agent-header {
   display: flex;
   min-width: 0;

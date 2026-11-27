@@ -30,7 +30,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -45,15 +44,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/** TokenDance Ark 与 MiniMax WebSocket 配音协议的无状态支持类。 */
+/** TokenDance Ark WebSocket 配音协议的无状态支持类。 */
 @Slf4j
 public final class TokenDanceWebSocketAudioSupport
 {
     public static final String ARK_PROTOCOL = "tokendance:ark:tts_ws";
-    public static final String MINIMAX_PROTOCOL = "tokendance:minimax:t2a_v2_ws";
 
     private static final String ARK_PATH = "/gateway/ark/v3/tts/bidirection";
-    private static final String MINIMAX_PATH = "/gateway/minimax/v1/t2a_v2_ws";
     private static final int DEFAULT_TIMEOUT_MS = 300_000;
     private static final int CONNECT_TIMEOUT_MS = 30_000;
     private static final int MAX_AUDIO_BYTES = 96 * 1024 * 1024;
@@ -80,25 +77,10 @@ public final class TokenDanceWebSocketAudioSupport
     private static final int ARK_SESSION_FAILED = 153;
     private static final int ARK_TASK_REQUEST = 200;
 
-    private static final Set<String> PROTOCOLS = Set.of(ARK_PROTOCOL, MINIMAX_PROTOCOL);
+    private static final Set<String> PROTOCOLS = Set.of(ARK_PROTOCOL);
     private static final Set<String> ARK_FORMATS = Set.of("mp3", "wav", "pcm", "ogg_opus");
-    private static final Set<String> MINIMAX_FORMATS = Set.of("mp3", "pcm", "flac");
     private static final Set<Integer> ARK_SAMPLE_RATES = Set.of(
             8000, 16000, 22050, 24000, 32000, 44100, 48000);
-    private static final Set<Integer> MINIMAX_SAMPLE_RATES = Set.of(
-            8000, 16000, 22050, 24000, 32000, 44100);
-    private static final Set<Integer> MINIMAX_BITRATES = Set.of(32000, 64000, 128000, 256000);
-    private static final Set<String> MINIMAX_EMOTIONS = Set.of(
-            "happy", "sad", "angry", "fearful", "disgusted", "surprised",
-            "calm", "fluent", "whisper");
-    private static final Set<String> MINIMAX_SUBTITLE_TYPES = Set.of(
-            "sentence", "word", "word_streaming");
-    private static final Set<String> MINIMAX_SOUND_EFFECTS = Set.of(
-            "spacious_echo", "auditorium_echo", "lofi_telephone", "robotic");
-    private static final Set<String> MINIMAX_OPTION_KEYS = Set.of(
-            "channel", "bitrate", "languageBoost", "subtitleType", "pronunciationTone",
-            "textNormalization", "latexRead", "voiceModifyPitch", "voiceModifyIntensity",
-            "voiceModifyTimbre", "soundEffect");
     private static final Set<String> ARK_OPTION_KEYS = Set.of("silenceDurationMs");
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -125,17 +107,9 @@ public final class TokenDanceWebSocketAudioSupport
         range(request.getSpeechRate(), -50, 100, "语速无效");
         range(request.getLoudnessRate(), -50, 100, "音量无效");
         range(request.getPitch(), -12, 12, "音调无效");
-        if (MINIMAX_PROTOCOL.equals(trim(config.getProtocol())))
-        {
-            validateMinimax(config, request);
-        }
-        else
-        {
-            validateArk(config, request);
-        }
+        validateArk(config, request);
         try {
-            if (MINIMAX_PROTOCOL.equals(trim(config.getProtocol()))) minimaxStart(config, request);
-            else ModelConfiguredRequestBody.apply(config, arkStart(request), request);
+            ModelConfiguredRequestBody.apply(config, arkStart(request), request);
         } catch (ServiceException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -164,11 +138,7 @@ public final class TokenDanceWebSocketAudioSupport
         return recoveryStore.recoverOrGenerate(config, request, null, () -> {
             try
             {
-                TokenDanceAudioRecoveryStore.GeneratedAudio audio =
-                        MINIMAX_PROTOCOL.equals(trim(config.getProtocol()))
-                                ? submitMinimax(config, request, deadline)
-                                : submitArk(config, request, deadline);
-                return TokenDanceAudioRecoveryStore.GenerationResult.success(audio);
+                return TokenDanceAudioRecoveryStore.GenerationResult.success(submitArk(config, request, deadline));
             }
             catch (ExplicitUpstreamFailure failure)
             {
@@ -192,82 +162,6 @@ public final class TokenDanceWebSocketAudioSupport
                 throw exception;
             }
         });
-    }
-
-    private static TokenDanceAudioRecoveryStore.GeneratedAudio submitMinimax(AiModelConfigVo config,
-            MediaAudioGenerateRequest request, Deadline deadline) throws Exception
-    {
-        SocketSession session = connect(config, MINIMAX_PATH, Map.of(), deadline);
-        byte[] audio = null;
-        boolean handedOff = false;
-        try
-        {
-            JsonNode connected = nextMinimax(session, deadline);
-            requireMinimaxEvent(connected, "connected_success");
-
-            sendText(session.socket(), json(minimaxStart(config, request)), deadline);
-            JsonNode started = waitMinimaxEvent(session, "task_started", deadline);
-            requireMinimaxSuccess(started);
-
-            sendText(session.socket(), json(Map.of(
-                    "event", "task_continue", "text", request.getTtsText())), deadline);
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            JsonNode resultFrame = null;
-            int messages = 0;
-            while (resultFrame == null)
-            {
-                if (++messages > MAX_CONTROL_MESSAGES)
-                {
-                    fail("minimax frame count exceeded", "音频响应过多");
-                }
-                JsonNode frame = nextMinimax(session, deadline);
-                requireMinimaxSuccess(frame);
-                String event = frame.path("event").asText();
-                if ("task_failed".equals(event))
-                {
-                    throw explicit(frame, session.recoveryAction());
-                }
-                appendMinimaxAudio(output, frame);
-                redactMinimaxAudio(frame);
-                if (frame.path("is_final").asBoolean(false))
-                {
-                    resultFrame = frame;
-                }
-            }
-
-            sendText(session.socket(), json(Map.of("event", "task_finish")), deadline);
-            JsonNode finished = waitMinimaxEvent(session, "task_finished", deadline);
-            requireMinimaxSuccess(finished);
-            if (output.size() == 0)
-            {
-                fail("minimax empty audio", "音频响应未完成");
-            }
-            audio = output.toByteArray();
-            String format = format(request, "mp3");
-            validateAudio(audio, format);
-            long duration = positiveLong(resultFrame.path("extra_info").path("audio_length"));
-            long characters = positiveOrZeroLong(
-                    resultFrame.path("extra_info").path("usage_characters"));
-            ObjectNode audit = MAPPER.createObjectNode();
-            audit.put("protocol", MINIMAX_PROTOCOL);
-            audit.set("result", resultFrame);
-            audit.set("terminal", finished);
-            addRecovery(audit, session.recoveryAction());
-            Map<String, Object> usage = characters >= 0
-                    ? Map.of("usage_characters", characters) : Map.of();
-            handedOff = true;
-            return new TokenDanceAudioRecoveryStore.GeneratedAudio(audio, format,
-                    duration > 0 ? duration : durationMs(audio, format, request, 32000),
-                    usage, json(audit), null);
-        }
-        finally
-        {
-            close(session.socket());
-            if (!handedOff && audio != null)
-            {
-                Arrays.fill(audio, (byte) 0);
-            }
-        }
     }
 
     private static TokenDanceAudioRecoveryStore.GeneratedAudio submitArk(AiModelConfigVo config,
@@ -367,108 +261,6 @@ public final class TokenDanceWebSocketAudioSupport
                 throw new ExplicitUpstreamFailure(json(audit));
             }
             throw exception;
-        }
-    }
-
-    private static JsonNode nextMinimax(SocketSession session, Deadline deadline)
-            throws Exception
-    {
-        Inbound inbound = session.listener().next(deadline);
-        if (inbound.error() != null)
-        {
-            throw new ExecutionException(inbound.error());
-        }
-        if (inbound.closed())
-        {
-            fail("minimax closed before terminal", "配音结果待确认");
-        }
-        if (inbound.text() == null)
-        {
-            fail("minimax binary response", "音频响应无效");
-        }
-        JsonNode frame = MAPPER.readTree(inbound.text());
-        if (frame == null || !frame.isObject())
-        {
-            fail("minimax json invalid", "音频响应无效");
-        }
-        return frame;
-    }
-
-    private static JsonNode waitMinimaxEvent(SocketSession session, String expected,
-            Deadline deadline) throws Exception
-    {
-        for (int count = 0; count < MAX_CONTROL_MESSAGES; count++)
-        {
-            JsonNode frame = nextMinimax(session, deadline);
-            requireMinimaxSuccess(frame);
-            String event = frame.path("event").asText();
-            if ("task_failed".equals(event))
-            {
-                throw explicit(frame, session.recoveryAction());
-            }
-            if (expected.equals(event))
-            {
-                return frame;
-            }
-        }
-        fail("minimax expected event missing", "音频响应过多");
-        return null;
-    }
-
-    private static void requireMinimaxEvent(JsonNode frame, String expected)
-    {
-        requireMinimaxSuccess(frame);
-        if (!expected.equals(frame.path("event").asText()))
-        {
-            if ("task_failed".equals(frame.path("event").asText()))
-            {
-                throw explicit(frame, null);
-            }
-            fail("minimax unexpected event", "音频响应无效");
-        }
-    }
-
-    private static void requireMinimaxSuccess(JsonNode frame)
-    {
-        JsonNode code = frame.path("base_resp").path("status_code");
-        if (code.isNumber() && code.asLong() != 0)
-        {
-            throw explicit(frame, null);
-        }
-    }
-
-    private static void appendMinimaxAudio(ByteArrayOutputStream output, JsonNode frame)
-    {
-        JsonNode node = frame.path("data").path("audio");
-        if (!node.isTextual() || node.textValue().isEmpty())
-        {
-            return;
-        }
-        String encoded = node.textValue();
-        long remaining = MAX_AUDIO_BYTES - (long) output.size();
-        if ((encoded.length() & 1) != 0 || encoded.length() > remaining * 2L)
-        {
-            fail("minimax hex too large", "音频响应过大");
-        }
-        byte[] chunk;
-        try
-        {
-            chunk = HexFormat.of().parseHex(encoded);
-        }
-        catch (IllegalArgumentException exception)
-        {
-            fail("minimax hex invalid", "音频响应无效");
-            return;
-        }
-        output.writeBytes(chunk);
-        Arrays.fill(chunk, (byte) 0);
-    }
-
-    private static void redactMinimaxAudio(JsonNode frame)
-    {
-        if (frame.path("data") instanceof ObjectNode data && data.has("audio"))
-        {
-            data.put("audio", "[omitted]");
         }
     }
 
@@ -594,64 +386,6 @@ public final class TokenDanceWebSocketAudioSupport
                 (bytes[2] >>> 4) & 0x0f);
     }
 
-    private static Map<String, Object> minimaxStart(AiModelConfigVo config,
-            MediaAudioGenerateRequest request)
-    {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("event", "task_start");
-        body.put("model", TokenDancePayloadSupport.upstreamModel(config, request.getModelName()));
-        Map<String, Object> voice = new LinkedHashMap<>();
-        voice.put("voice_id", request.getVoiceCode().trim());
-        voice.put("speed", speed(request.getSpeechRate()));
-        voice.put("vol", volume(request.getLoudnessRate()));
-        voice.put("pitch", request.getPitch() == null ? 0 : request.getPitch());
-        if (StrUtil.isNotBlank(request.getEmotion()))
-        {
-            voice.put("emotion", request.getEmotion().trim());
-        }
-        Object englishNormalization = option(request, "textNormalization");
-        if (englishNormalization != null)
-        {
-            voice.put("english_normalization", englishNormalization);
-        }
-        Object latexRead = option(request, "latexRead");
-        if (latexRead != null)
-        {
-            voice.put("latex_read", latexRead);
-        }
-        body.put("voice_setting", voice);
-        body.put("audio_setting", Map.of(
-                "sample_rate", request.getSampleRate() == null ? 32000 : request.getSampleRate(),
-                "bitrate", optionInteger(request, "bitrate", 128000),
-                "format", format(request, "mp3"),
-                "channel", optionInteger(request, "channel", 1)));
-        String languageBoost = optionText(request, "languageBoost");
-        if (languageBoost != null)
-        {
-            body.put("language_boost", languageBoost);
-        }
-        List<String> pronunciation = optionTextList(request, "pronunciationTone");
-        if (pronunciation != null)
-        {
-            body.put("pronunciation_dict", Map.of("tone", pronunciation));
-        }
-        Map<String, Object> modify = minimaxVoiceModify(request);
-        if (!modify.isEmpty())
-        {
-            body.put("voice_modify", modify);
-        }
-        if (Boolean.TRUE.equals(request.getEnableTimestamp()))
-        {
-            body.put("subtitle_enable", true);
-            String subtitleType = optionText(request, "subtitleType");
-            if (subtitleType != null)
-            {
-                body.put("subtitle_type", subtitleType);
-            }
-        }
-        return ModelConfiguredRequestBody.apply(config, body, request);
-    }
-
     private static Map<String, Object> arkStart(MediaAudioGenerateRequest request)
             throws Exception
     {
@@ -686,62 +420,6 @@ public final class TokenDanceWebSocketAudioSupport
         return Map.of("req_params", params);
     }
 
-    private static void validateMinimax(AiModelConfigVo config,
-            MediaAudioGenerateRequest request)
-    {
-        if (request.getTtsText().codePointCount(0, request.getTtsText().length()) > 10_000)
-        {
-            fail("minimax text too long", "配音文本过长");
-        }
-        String format = format(request, "mp3");
-        if (!MINIMAX_FORMATS.contains(format))
-        {
-            fail("minimax format unsupported", "音频格式不支持");
-        }
-        if (request.getSampleRate() != null && !MINIMAX_SAMPLE_RATES.contains(request.getSampleRate()))
-        {
-            fail("minimax sample rate unsupported", "采样率不支持");
-        }
-        if (request.getEmotionScale() != null)
-        {
-            fail("minimax emotion scale unsupported", "情感强度不支持");
-        }
-        if (StrUtil.isNotBlank(request.getEmotion()))
-        {
-            String emotion = request.getEmotion().trim();
-            String model = TokenDancePayloadSupport.upstreamModel(config, request.getModelName());
-            if (!MINIMAX_EMOTIONS.contains(emotion)
-                    || model.contains("2.8") && "whisper".equals(emotion))
-            {
-                fail("minimax emotion unsupported", "音色情感不支持");
-            }
-        }
-        rejectUnknownOptions(config, request, MINIMAX_OPTION_KEYS);
-        int channel = optionInteger(request, "channel", 1);
-        int bitrate = optionInteger(request, "bitrate", 128000);
-        if (!Set.of(1, 2).contains(channel) || !MINIMAX_BITRATES.contains(bitrate))
-        {
-            fail("minimax audio option invalid", "音频参数无效");
-        }
-        requireBooleanOption(request, "textNormalization");
-        requireBooleanOption(request, "latexRead");
-        String subtitle = optionText(request, "subtitleType");
-        if (subtitle != null && !MINIMAX_SUBTITLE_TYPES.contains(subtitle))
-        {
-            fail("minimax subtitle invalid", "字幕类型不支持");
-        }
-        if (subtitle != null && !Boolean.TRUE.equals(request.getEnableTimestamp()))
-        {
-            fail("subtitle type without subtitle", "字幕参数未启用");
-        }
-        optionTextList(request, "pronunciationTone");
-        Map<String, Object> modify = minimaxVoiceModify(request);
-        if (!modify.isEmpty() && !"mp3".equals(format))
-        {
-            fail("stream voice modify format", "音效仅支持MP3");
-        }
-    }
-
     private static void validateArk(AiModelConfigVo config, MediaAudioGenerateRequest request)
     {
         if (!ARK_FORMATS.contains(format(request, "mp3")))
@@ -773,36 +451,6 @@ public final class TokenDanceWebSocketAudioSupport
         TokenDancePayloadSupport.rejectUnknownRequestOptions(config, options(request), allowed);
     }
 
-    private static Map<String, Object> minimaxVoiceModify(MediaAudioGenerateRequest request)
-    {
-        Map<String, Object> result = new LinkedHashMap<>();
-        for (Map.Entry<String, String> entry : Map.of(
-                "voiceModifyPitch", "pitch",
-                "voiceModifyIntensity", "intensity",
-                "voiceModifyTimbre", "timbre").entrySet())
-        {
-            Integer value = optionIntegerNullable(request, entry.getKey());
-            if (value != null)
-            {
-                if (value < -100 || value > 100)
-                {
-                    fail("minimax voice modify range", "音效参数无效");
-                }
-                result.put(entry.getValue(), value);
-            }
-        }
-        String effect = optionText(request, "soundEffect");
-        if (effect != null)
-        {
-            if (!MINIMAX_SOUND_EFFECTS.contains(effect))
-            {
-                fail("minimax sound effect invalid", "音效类型不支持");
-            }
-            result.put("sound_effects", effect);
-        }
-        return result;
-    }
-
     private static URI websocketUri(String baseUrl, String path)
     {
         try
@@ -822,16 +470,6 @@ public final class TokenDanceWebSocketAudioSupport
             fail("websocket endpoint invalid", "模型配置错误");
             return null;
         }
-    }
-
-    private static void sendText(WebSocket socket, String text, Deadline deadline)
-            throws Exception
-    {
-        if (text.getBytes(StandardCharsets.UTF_8).length > MAX_JSON_REQUEST_BYTES)
-        {
-            fail("minimax request too large", "配音文本过长");
-        }
-        socket.sendText(text, true).get(deadline.remainingMs(), TimeUnit.MILLISECONDS);
     }
 
     private static void sendBinary(WebSocket socket, byte[] body, Deadline deadline)
@@ -933,87 +571,6 @@ public final class TokenDanceWebSocketAudioSupport
         return number.intValue();
     }
 
-    private static int optionInteger(MediaAudioGenerateRequest request, String key, int fallback)
-    {
-        Integer value = optionIntegerNullable(request, key);
-        return value == null ? fallback : value;
-    }
-
-    private static String optionText(MediaAudioGenerateRequest request, String key)
-    {
-        Object raw = option(request, key);
-        if (raw == null)
-        {
-            return null;
-        }
-        if (!(raw instanceof String))
-        {
-            fail("text option invalid", "音频参数无效");
-        }
-        String text = (String) raw;
-        if (StrUtil.isBlank(text) || text.length() > 512)
-        {
-            fail("text option invalid", "音频参数无效");
-        }
-        return text.trim();
-    }
-
-    private static List<String> optionTextList(MediaAudioGenerateRequest request, String key)
-    {
-        Object raw = option(request, key);
-        if (raw == null)
-        {
-            return null;
-        }
-        if (!(raw instanceof List<?>))
-        {
-            fail("text list option invalid", "发音规则无效");
-        }
-        List<?> list = (List<?>) raw;
-        if (list.isEmpty() || list.size() > 100)
-        {
-            fail("text list option invalid", "发音规则无效");
-        }
-        List<String> values = new ArrayList<>(list.size());
-        for (Object item : list)
-        {
-            if (!(item instanceof String))
-            {
-                fail("pronunciation item invalid", "发音规则无效");
-            }
-            String text = (String) item;
-            if (StrUtil.isBlank(text) || text.length() > 256)
-            {
-                fail("pronunciation item invalid", "发音规则无效");
-            }
-            values.add(text.trim());
-        }
-        return values;
-    }
-
-    private static void requireBooleanOption(MediaAudioGenerateRequest request, String key)
-    {
-        Object raw = option(request, key);
-        if (raw != null && !(raw instanceof Boolean))
-        {
-            fail("boolean option invalid", "音频开关无效");
-        }
-    }
-
-    private static double speed(Integer rate)
-    {
-        return rate == null ? 1.0 : 1.0 + rate / 100.0;
-    }
-
-    private static double volume(Integer rate)
-    {
-        if (rate == null)
-        {
-            return 1.0;
-        }
-        return rate >= 0 ? 1.0 + rate * 0.09 : 1.0 + rate / 100.0;
-    }
-
     private static void range(Integer value, int min, int max, String message)
     {
         if (value != null && (value < min || value > max))
@@ -1096,17 +653,6 @@ public final class TokenDanceWebSocketAudioSupport
     private static String utf8(byte[] bytes)
     {
         return new String(bytes, StandardCharsets.UTF_8);
-    }
-
-    private static ExplicitUpstreamFailure explicit(JsonNode node, String recovery)
-    {
-        JsonNode copy = node == null ? MAPPER.createObjectNode() : node.deepCopy();
-        if (copy instanceof ObjectNode object)
-        {
-            redactMinimaxAudio(object);
-            addRecovery(object, recovery);
-        }
-        return new ExplicitUpstreamFailure(json(copy));
     }
 
     private static String arkErrorAudit(ArkFrame frame, String recovery)

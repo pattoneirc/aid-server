@@ -49,6 +49,7 @@ import { MultiAngleCameraModal } from '~/components/steps/MultiAngleCameraModal'
 import { TouchEditModal } from '~/components/steps/TouchEditModal'
 import { assetUrl } from '~/utils/assetUrl'
 import { storyboardPromptHtmlToPlain } from '~/utils/storyboardPromptAssetRef'
+import { storyboardImageBindingsFromHtml } from '~/utils/storyboardImageBindings'
 import { EDIT_ASSET_PROMPT_MAX_CHARS } from '~/utils/htmlPlain'
 import { resolveModelPromptCharacterLimit } from '~/utils/modelCapability'
 import type { BillingQuoteRequest } from '~/types/business-api'
@@ -68,6 +69,7 @@ import addIconRaw from '~/assets/img/icon/add.svg'
 import addSelIconRaw from '~/assets/img/icon/add-sel.svg'
 import deleteIconRaw from '~/assets/img/icon/del-black.svg'
 import { useEditStoryboardImageModalController } from './useEditStoryboardImageModalController'
+import { useStoryboardReferenceImport } from './useStoryboardReferenceImport'
 import { StoryboardModalSkeleton } from './StoryboardModalSkeleton'
 import {
   buildStoryboardModalEditRequest,
@@ -100,6 +102,7 @@ export type { EditStoryboardImageModalProps }
 
 export function EditStoryboardImageModal(props: EditStoryboardImageModalProps) {
   const { ctx, headerTabsForDisplay } = useEditStoryboardImageModalController(props)
+  const referenceImport = useStoryboardReferenceImport(ctx, props.open)
 
   const getCanvasToolbarIcon = (key: CanvasToolbarKey) =>
     ctx.canvasToolbarHoverKey.value === key
@@ -148,6 +151,7 @@ export function EditStoryboardImageModal(props: EditStoryboardImageModalProps) {
           storyboardIds: [storyboardId],
           ...(imageAgentCode ? { agentCode: imageAgentCode } : {}),
           imagePrompt,
+          imageReferences: storyboardImageBindingsFromHtml(ctx.storyboardPrompt.value),
           modelName,
           aspectRatio,
           size,
@@ -626,6 +630,9 @@ export function EditStoryboardImageModal(props: EditStoryboardImageModalProps) {
                               ref={ctx.storyboardGeneratePanelRef}
                               mode="storyboard"
                               usePreciseLayout={false}
+                              useParamSettingsModal={referenceImport.enabled}
+                              referenceImportLabel={referenceImport.busy ? '正在导入…' : '导入图片'}
+                              onImportReference={referenceImport.enabled ? referenceImport.openPicker : undefined}
                               suppressPromptReactiveSync={
                                 ctx.storyboardPromptProgrammaticSyncDepth.value > 0
                               }
@@ -775,7 +782,8 @@ export function EditStoryboardImageModal(props: EditStoryboardImageModalProps) {
                           loading={ctx.showStoryboardGenerateButtonLoading()}
                           disabled={
                             ctx.showStoryboardGenerateButtonLoading() ||
-                            ctx.showGeneratingPromptForScene()
+                            ctx.showGeneratingPromptForScene() ||
+                            referenceImport.busy
                           }
                           onClick={() => void ctx.handleStartGenerate()}
                         >
@@ -851,6 +859,14 @@ export function EditStoryboardImageModal(props: EditStoryboardImageModalProps) {
         stepPanelImages={currentSceneImages}
         onConfirm={ctx.onSelectAssetConfirm}
       />
+      {referenceImport.enabled ? <SelectAssetImageModal
+        open={referenceImport.pickerOpen}
+        onOpenChange={referenceImport.onOpenChange}
+        type="reference"
+        stepPanelImages={currentSceneImages}
+        stepTabName={currentScene.name?.trim() || `分镜${currentSceneIndex + 1}`}
+        onConfirm={items => void referenceImport.onConfirm(items)}
+      /> : null}
 
       <StoryboardScriptModal
         key={`sb-img-${currentSceneIndex}-${ctx.scriptEditorKey.value}`}

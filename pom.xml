@@ -57,6 +57,13 @@
     <dependencyManagement>
         <dependencies>
 
+            <!-- Keep transitive bytecode tooling compatible with the Java 17 build. -->
+            <dependency>
+                <groupId>org.javassist</groupId>
+                <artifactId>javassist</artifactId>
+                <version>3.30.2-GA</version>
+            </dependency>
+
             <!-- aid-springboot3 / mybatis-plus 配置 -->
             <dependency>
                 <groupId>org.mybatis</groupId>

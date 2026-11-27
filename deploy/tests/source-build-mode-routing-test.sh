@@ -139,6 +139,7 @@ assert_before "$(declare -f do_install_manual)" 'set_source_build_mode manual' '
 assert_before "$(declare -f do_update)" 'set_source_build_mode "${mode}"' 'prepare_install_package'
 assert_before "$(declare -f ensure_source_package)" 'require_source_build_mode' 'sourceBuildMode="${AID_SOURCE_BUILD_MODE}"'
 assert_before "$(declare -f ensure_source_package)" 'bootstrap_source_builder "${sourceBuildMode}"' 'prepare_source_build_images "${sourceBuildMode}"'
+assert_before "$(declare -f ensure_source_package)" 'prepare_ffmpeg_runtime "${AID_DEPENDENCY_INSTALL_MODE:-auto}"' 'sh "${builder}" --version'
 assert_before "$(declare -f do_setup_updater)" 'set_source_build_mode "${mode}"' 'bootstrap_source_builder "${AID_SOURCE_BUILD_MODE}"'
 
 builder_file="${ROOT_DIR}/deploy/build-release-from-source.sh"

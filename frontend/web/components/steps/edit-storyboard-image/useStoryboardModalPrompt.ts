@@ -323,7 +323,7 @@ export function useStoryboardModalPrompt(
       url: item.url || item.thumbnail,
       thumbnail: item.thumbnail || item.url,
       title: item.title || item.name || '参考图',
-      id: item.id || `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+      id: item.id ? `lib-${item.id}` : `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     }))
     if (ctx.storyboardGeneratePanelRef.current?.isParamSettingsOpen?.()) {
       const type =
@@ -345,7 +345,8 @@ export function useStoryboardModalPrompt(
     if (!items?.length) return
     const list = items.map((item) => ({
       ...item,
-      id: item.id || `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+      id: item.source === '资产库导入' && item.id ? `lib-${item.id}`
+        : item.id || `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     }))
     if (ctx.storyboardGeneratePanelRef.current?.isParamSettingsOpen?.()) {
       ctx.storyboardGeneratePanelRef.current.applyParamDraftAssets(

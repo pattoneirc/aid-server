@@ -9,6 +9,8 @@ set -eu
 VERSION=""
 OUTPUT=""
 WORK_DIR=""
+WORK_DIR_OWNED=no
+PACKAGE_PART=""
 FORGE="${AID_SOURCE_FORGE:-auto}"
 SOURCE_BUILD_MODE="${AID_SOURCE_BUILD_MODE:-auto}"
 DATA_ROOT="${AID_DATA_ROOT:-/data/aid}"
@@ -44,12 +46,13 @@ NODE_IMAGE="${AID_NODE_IMAGE:-node:22.22.0-bookworm-slim}"
 GO_IMAGE="${AID_GO_IMAGE:-golang:1.22.12-bookworm}"
 DEPENDENCY_INSTALL_MODE="${AID_DEPENDENCY_INSTALL_MODE:-auto}"
 DEPENDENCY_REGION="${AID_DEPENDENCY_REGION:-auto}"
-DEFAULT_DOCKER_MIRRORS="docker.m.daocloud.io,dockerproxy.net"
+DEFAULT_DOCKER_MIRRORS="docker.m.daocloud.io,docker.1panel.live,docker.1ms.run"
 DOCKER_MIRRORS="${AID_DOCKER_MIRRORS:-${AID_DOCKER_CN_MIRROR:-$DEFAULT_DOCKER_MIRRORS}}"
 DOCKER_MIRROR_ORDER=""
 DOCKER_MIRRORS_RESOLVED=0
 IMAGE_PULL_TIMEOUT_SECONDS="${AID_IMAGE_PULL_TIMEOUT_SECONDS:-900}"
-IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS="${AID_IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS:-45}"
+MIRROR_IMAGE_PULL_TIMEOUT_SECONDS="${AID_DOCKER_MIRROR_PULL_TIMEOUT_SECONDS:-${AID_IMAGE_PULL_TIMEOUT_SECONDS:-120}}"
+IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS="${AID_IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS:-12}"
 DOWNLOAD_TIMEOUT_SECONDS="${AID_DOWNLOAD_TIMEOUT_SECONDS:-0}"
 DOWNLOAD_MIN_SPEED_BYTES="${AID_DOWNLOAD_MIN_SPEED_BYTES:-1024}"
 DOWNLOAD_LOW_SPEED_SECONDS="${AID_DOWNLOAD_LOW_SPEED_SECONDS:-30}"
@@ -558,12 +561,17 @@ configure_resource_profiles() {
   MAVEN_MEMORY_MAX_MB="${AID_BUILD_MAVEN_MEMORY_MAX_MB:-$(clamp_profile_memory "$SYSTEM_MEMORY_TOTAL_MB" 35 1024 2048)}"
   NODE_MEMORY_HIGH_MB="${AID_BUILD_NODE_MEMORY_HIGH_MB:-$(clamp_profile_memory "$SYSTEM_MEMORY_TOTAL_MB" 30 640 1536)}"
   NODE_MEMORY_MAX_MB="${AID_BUILD_NODE_MEMORY_MAX_MB:-$(clamp_profile_memory "$SYSTEM_MEMORY_TOTAL_MB" 40 768 2304)}"
+  WEB_MEMORY_MAX_MB="${AID_BUILD_WEB_MEMORY_MAX_MB:-${AID_BUILD_NODE_MEMORY_MAX_MB:-$(clamp_profile_memory "$SYSTEM_MEMORY_TOTAL_MB" 65 1536 4096)}}"
+  require_uint_range AID_BUILD_WEB_MEMORY_MAX_MB "$WEB_MEMORY_MAX_MB" 256 262144
+  WEB_MEMORY_HIGH_MB="${AID_BUILD_WEB_MEMORY_HIGH_MB:-$((WEB_MEMORY_MAX_MB * 75 / 100))}"
+  WEB_HEAP_MB="${AID_BUILD_WEB_HEAP_MB:-3072}"
   GO_MEMORY_HIGH_MB="${AID_BUILD_GO_MEMORY_HIGH_MB:-$(clamp_profile_memory "$SYSTEM_MEMORY_TOTAL_MB" 13 384 768)}"
   GO_MEMORY_MAX_MB="${AID_BUILD_GO_MEMORY_MAX_MB:-$(clamp_profile_memory "$SYSTEM_MEMORY_TOTAL_MB" 19 512 1024)}"
   PACKAGE_MEMORY_HIGH_MB="${AID_BUILD_PACKAGE_MEMORY_HIGH_MB:-$(clamp_profile_memory "$SYSTEM_MEMORY_TOTAL_MB" 13 384 768)}"
   PACKAGE_MEMORY_MAX_MB="${AID_BUILD_PACKAGE_MEMORY_MAX_MB:-$(clamp_profile_memory "$SYSTEM_MEMORY_TOTAL_MB" 19 512 1024)}"
   MAVEN_SWAP_MAX_MB="${AID_BUILD_MAVEN_SWAP_MAX_MB:-3072}"
   NODE_SWAP_MAX_MB="${AID_BUILD_NODE_SWAP_MAX_MB:-3072}"
+  WEB_SWAP_MAX_MB="${AID_BUILD_WEB_SWAP_MAX_MB:-$NODE_SWAP_MAX_MB}"
   GO_SWAP_MAX_MB="${AID_BUILD_GO_SWAP_MAX_MB:-1024}"
   PACKAGE_SWAP_MAX_MB="${AID_BUILD_PACKAGE_SWAP_MAX_MB:-1024}"
   MAVEN_PIDS_MAX="${AID_BUILD_MAVEN_PIDS_MAX:-512}"
@@ -574,6 +582,8 @@ configure_resource_profiles() {
 
   validate_profile Maven "$MAVEN_CPU_MILLI" "$MAVEN_MEMORY_HIGH_MB" "$MAVEN_MEMORY_MAX_MB" "$MAVEN_SWAP_MAX_MB" "$MAVEN_PIDS_MAX"
   validate_profile Node "$NODE_CPU_MILLI" "$NODE_MEMORY_HIGH_MB" "$NODE_MEMORY_MAX_MB" "$NODE_SWAP_MAX_MB" "$NODE_PIDS_MAX"
+  validate_profile Web "$NODE_CPU_MILLI" "$WEB_MEMORY_HIGH_MB" "$WEB_MEMORY_MAX_MB" "$WEB_SWAP_MAX_MB" "$NODE_PIDS_MAX"
+  require_uint_range AID_BUILD_WEB_HEAP_MB "$WEB_HEAP_MB" 1536 16384
   validate_profile Go "$GO_CPU_MILLI" "$GO_MEMORY_HIGH_MB" "$GO_MEMORY_MAX_MB" "$GO_SWAP_MAX_MB" "$GO_PIDS_MAX"
   validate_profile 打包 "$PACKAGE_CPU_MILLI" "$PACKAGE_MEMORY_HIGH_MB" "$PACKAGE_MEMORY_MAX_MB" "$PACKAGE_SWAP_MAX_MB" "$PACKAGE_PIDS_MAX"
   [ "$PAUSED_CPU_MILLI" -lt "$MAVEN_CPU_MILLI" ] \
@@ -647,9 +657,13 @@ load_stage_profile() {
       STAGE_CPU_MILLI="$MAVEN_CPU_MILLI"; STAGE_MEMORY_HIGH_MB="$MAVEN_MEMORY_HIGH_MB"
       STAGE_MEMORY_MAX_MB="$MAVEN_MEMORY_MAX_MB"; STAGE_SWAP_MAX_MB="$MAVEN_SWAP_MAX_MB"; STAGE_PIDS_MAX="$MAVEN_PIDS_MAX"
       ;;
-    node|web)
+    node)
       STAGE_CPU_MILLI="$NODE_CPU_MILLI"; STAGE_MEMORY_HIGH_MB="$NODE_MEMORY_HIGH_MB"
       STAGE_MEMORY_MAX_MB="$NODE_MEMORY_MAX_MB"; STAGE_SWAP_MAX_MB="$NODE_SWAP_MAX_MB"; STAGE_PIDS_MAX="$NODE_PIDS_MAX"
+      ;;
+    web)
+      STAGE_CPU_MILLI="$NODE_CPU_MILLI"; STAGE_MEMORY_HIGH_MB="$WEB_MEMORY_HIGH_MB"
+      STAGE_MEMORY_MAX_MB="$WEB_MEMORY_MAX_MB"; STAGE_SWAP_MAX_MB="$WEB_SWAP_MAX_MB"; STAGE_PIDS_MAX="$NODE_PIDS_MAX"
       ;;
     go)
       STAGE_CPU_MILLI="$GO_CPU_MILLI"; STAGE_MEMORY_HIGH_MB="$GO_MEMORY_HIGH_MB"
@@ -715,7 +729,7 @@ apply_realtime_stage_budget() {
       runtime_heap_cap_mb=$((combined_budget_mb - 768))
       [ "$runtime_heap_cap_mb" -ge 1536 ] \
         || die "$stage_label 的内存和Swap不足；请增加可用Swap或内存后重试"
-      STAGE_NODE_HEAP_MB=3072
+      STAGE_NODE_HEAP_MB="$WEB_HEAP_MB"
       [ "$STAGE_NODE_HEAP_MB" -le "$runtime_heap_cap_mb" ] || STAGE_NODE_HEAP_MB="$runtime_heap_cap_mb"
       STAGE_NODE_OPTIONS_VALUE="--max-old-space-size=${STAGE_NODE_HEAP_MB}"
       log "[资源][$stage_label] Next.js V8 堆 ${STAGE_NODE_HEAP_MB}MiB，进程及原生内存预留 768MiB"
@@ -820,11 +834,26 @@ cleanup_active_stage() {
 }
 
 cleanup_on_exit() {
+  build_exit_status=$?
+  trap - EXIT
   cleanup_active_stage
+  if [ -n "$PACKAGE_PART" ]; then
+    rm -f -- "$PACKAGE_PART" "$PACKAGE_PART.sha256" \
+      || { warn "清理临时压缩包失败: $PACKAGE_PART"; build_exit_status=1; }
+  fi
+  if [ "$WORK_DIR_OWNED" = yes ]; then
+    if [ ! -L "$WORK_DIR" ] && rm -rf --one-file-system -- "$WORK_DIR" && [ ! -e "$WORK_DIR" ]; then
+      log "源码构建工作目录已清理: $WORK_DIR"
+    else
+      warn "清理源码构建工作目录失败: $WORK_DIR"
+      build_exit_status=1
+    fi
+  fi
+  exit "$build_exit_status"
 }
 
 trap cleanup_on_exit EXIT
-trap 'cleanup_active_stage; exit 130' HUP INT TERM
+trap 'exit 130' HUP INT TERM
 
 probe_docker_resource_features() {
   probe_name="aid-source-build-probe-$$"
@@ -1367,8 +1396,53 @@ monitor_stage() {
   return 0
 }
 
+report_web_stage_failure() {
+  local oom=unknown docker_oom_events oom_count scope_result memory_mount relative_group
+  if [ "$1" = docker ]; then
+    if command -v timeout >/dev/null 2>&1 && docker_oom_events="$(timeout 5 docker events \
+        --since "$WEB_STAGE_STARTED_AT" --until "$(( $(date +%s) + 1 ))" \
+        --filter "container=$ACTIVE_DOCKER_CONTAINER" --filter event=oom --format '{{.Action}}' 2>/dev/null)"; then
+      oom=not-observed
+      [ -z "$docker_oom_events" ] || oom=confirmed
+    fi
+  elif [ -n "$HOST_MEMORY_CGROUP" ]; then
+    if [ -r "$HOST_MEMORY_CGROUP/memory.events" ]; then
+      oom_count="$(awk '$1 == "oom_kill" { print $2 }' "$HOST_MEMORY_CGROUP/memory.events" 2>/dev/null || true)"
+    elif [ -r "$HOST_MEMORY_CGROUP/memory.oom_control" ]; then
+      oom_count="$(awk '$1 == "oom_kill" { print $2 }' "$HOST_MEMORY_CGROUP/memory.oom_control" 2>/dev/null || true)"
+    fi
+    if [ -n "${oom_count:-}" ]; then
+      oom=not-observed
+      [ "$oom_count" -eq 0 ] || oom=confirmed
+    elif [ -n "$ACTIVE_HOST_UNIT" ]; then
+      scope_result="$(systemctl show -p Result --value "$ACTIVE_HOST_UNIT.scope" 2>/dev/null || true)"
+      [ "$scope_result" != oom-kill ] || oom=confirmed
+    fi
+  fi
+  # systemd may remove an empty scope before wait returns. Match the exact
+  # memory cgroup from the kernel log while it is still in this stage's window.
+  if [ "$1" = host ] && [ "$oom" = unknown ] && [ -n "${WEB_STAGE_STARTED_AT:-}" ] \
+      && [ -n "$HOST_MEMORY_CGROUP" ] && command -v journalctl >/dev/null 2>&1; then
+    memory_mount="$(find_cgroup2_mount)"
+    [ -n "$memory_mount" ] || memory_mount="$(find_cgroup1_mount memory)"
+    relative_group="${HOST_MEMORY_CGROUP#"$memory_mount"}"
+    if [ -n "$memory_mount" ] && [ "$relative_group" != "$HOST_MEMORY_CGROUP" ] \
+        && journalctl -k --since "@$WEB_STAGE_STARTED_AT" --no-pager -n 200 -o cat 2>/dev/null \
+          | awk -v group="$relative_group" 'index($0, "oom_memcg=" group ",") { found=1 } END { exit !found }'; then
+      oom=confirmed
+    fi
+  fi
+  warn "Web构建失败 (exit=$2, cgroup OOM=$oom)：物理内存上限 ${STAGE_MEMORY_MAX_MB}MiB，额外Swap上限 ${STAGE_SWAP_MAX_MB}MiB，V8堆上限 ${STAGE_NODE_HEAP_MB}MiB"
+  if [ "$oom" = confirmed ]; then
+    warn '检查可用内存和Swap，再按需调整 AID_BUILD_WEB_MEMORY_MAX_MB / AID_BUILD_WEB_SWAP_MAX_MB'
+  elif [ "$oom" = unknown ]; then
+    warn 'cgroup OOM记录不可用，请结合该时段的内核日志判断'
+  fi
+}
+
 finish_governed_stage() {
   backend="$1"; stage_label="$2"
+  finished_stage_name="$3"
   monitor_status=0
   monitor_stage "$backend" "$stage_label" "$STAGE_CPU_MILLI" "$ACTIVE_RUNNER_PID" || monitor_status=$?
   if [ "$monitor_status" -eq 2 ]; then
@@ -1380,6 +1454,9 @@ finish_governed_stage() {
     fi
   fi
   if wait "$ACTIVE_RUNNER_PID"; then stage_status=0; else stage_status=$?; fi
+  if [ "$finished_stage_name" = web ] && [ "$stage_status" -ne 0 ]; then
+    report_web_stage_failure "$backend" "$stage_status"
+  fi
   if [ "$backend" = docker ]; then
     docker unpause "$ACTIVE_DOCKER_CONTAINER" >/dev/null 2>&1 || true
     docker rm -f "$ACTIVE_DOCKER_CONTAINER" >/dev/null 2>&1 || true
@@ -1401,19 +1478,21 @@ finish_governed_stage() {
   if [ -n "$ACTIVE_HOST_PID_FILE" ]; then rm -f -- "$ACTIVE_HOST_PID_FILE"; fi
   ACTIVE_HOST_PID_FILE=""
   if [ "$stage_status" -eq 137 ]; then
-    die "$stage_label 触发资源硬限制并被终止；可通过合法的AID_BUILD阶段配额调整后重试，旧版本尚未切换"
+    die "$stage_label 收到 SIGKILL (exit=137)；请检查上方资源记录及系统日志，旧版本尚未切换"
   fi
   return "$stage_status"
 }
 
 run_docker_stage() {
   stage_name="$1"; stage_label="$2"; shift 2
+  if [ "$stage_name" = web ]; then WEB_STAGE_STARTED_AT="$(date +%s)"; fi
   start_docker_stage "$stage_name" "$stage_label" "$@"
   finish_governed_stage docker "$stage_label" "$stage_name"
 }
 
 run_host_stage() {
   stage_name="$1"; stage_label="$2"; work_dir="$3"; shift 3
+  if [ "$stage_name" = web ]; then WEB_STAGE_STARTED_AT="$(date +%s)"; fi
   start_host_stage "$stage_name" "$stage_label" "$work_dir" "$@"
   finish_governed_stage host "$stage_label" "$stage_name"
 }
@@ -1432,6 +1511,7 @@ usage() {
   AID_DEPENDENCY_REGION       依赖线路：auto、cn 或 global；auto 按服务器公网出口地区选择
   AID_DOCKER_MIRRORS          Docker Hub 国内镜像前缀，逗号分隔；自动测速排序
   AID_DOCKER_CN_MIRROR        兼容旧版单镜像设置（新配置优先使用 AID_DOCKER_MIRRORS）
+  AID_DOCKER_MIRROR_PULL_TIMEOUT_SECONDS  每个国内镜像源的拉取超时，默认 120 秒
   AID_JDK_DOWNLOAD_URL        覆盖 Oracle JDK 17.0.8 下载地址
   AID_DOWNLOAD_TIMEOUT_SECONDS 下载总时长上限；默认0不限，正整数（如1500）启用硬超时
   AID_*_IMAGE                 覆盖 Docker 构建镜像
@@ -1448,9 +1528,10 @@ usage() {
   AID_BUILD_MANAGED_SWAP      AID受管Swap策略：auto、yes或no，默认auto；低内存Docker升级也会通过隔离辅助容器准备，目标总量4096MiB
   AID_BUILD_MANAGED_SWAP_FILE 受管Swap文件，默认位于 DATA_ROOT/build-cache/.aid-swap
   AID_BUILD_*_CPU_MILLI       Maven/Node/Go/打包阶段CPU毫核上限
-  AID_BUILD_*_MEMORY_HIGH_MB  各阶段内存软限制（Maven/Node/Go/Package）
-  AID_BUILD_*_MEMORY_MAX_MB   各阶段物理内存硬限制（Maven/Node/Go/Package）
-  AID_BUILD_*_SWAP_MAX_MB     各阶段额外Swap上限（Maven/Node/Go/Package）
+  AID_BUILD_*_MEMORY_HIGH_MB  各阶段内存软限制（Maven/Node/Web/Go/Package）
+  AID_BUILD_*_MEMORY_MAX_MB   各阶段物理内存硬限制（Maven/Node/Web/Go/Package）
+  AID_BUILD_*_SWAP_MAX_MB     各阶段额外Swap上限（Maven/Node/Web/Go/Package）
+  AID_BUILD_WEB_HEAP_MB       Next.js V8堆上限，默认3072MiB，按实时内存与Swap预算收紧
 EOF
 }
 
@@ -1563,9 +1644,9 @@ normalize_docker_mirror() {
 probe_docker_mirror() {
   mirror_probe="$1"
   mirror_registry="${mirror_probe%%/*}"
-  command -v curl >/dev/null 2>&1 || return 1
+  command -v curl >/dev/null 2>&1 || return 2
   mirror_result="$(curl -sS -o /dev/null --connect-timeout 3 --max-time 6 \
-    -w '%{http_code} %{time_total}' "https://$mirror_registry/v2/" 2>/dev/null || true)"
+    -w '%{http_code} %{time_total}' "https://$mirror_registry/v2/" 2>/dev/null)" || return 2
   mirror_code="${mirror_result%% *}"
   mirror_seconds="${mirror_result#* }"
   case "$mirror_code" in 200|401) ;; *) return 1 ;; esac
@@ -1590,8 +1671,10 @@ resolve_docker_mirror_order() {
     if mirror_latency="$(probe_docker_mirror "$mirror_normalized" 2>/dev/null)"; then
       log "Docker镜像测速: $mirror_normalized ${mirror_latency}ms"
       mirror_ranked="${mirror_ranked}${mirror_latency} ${mirror_normalized}\n"
+    elif [ "$?" -eq 2 ]; then
+      warn "Docker镜像源连接失败，本次跳过: $mirror_normalized"
     else
-      warn "Docker镜像测速不可达，保留为末位重试: $mirror_normalized"
+      warn "Docker镜像源根接口未通过检查，留待镜像清单验证: $mirror_normalized"
       mirror_deferred="$mirror_deferred$mirror_normalized "
     fi
     IFS=','
@@ -1605,10 +1688,33 @@ resolve_docker_mirror_order() {
   DOCKER_MIRROR_ORDER="${DOCKER_MIRROR_ORDER% }"
   DOCKER_MIRRORS_RESOLVED=1
   if [ -n "$DOCKER_MIRROR_ORDER" ]; then
-    log "Docker国内镜像尝试顺序: $(printf '%s' "$DOCKER_MIRROR_ORDER" | sed 's/ / -> /g')"
+    log "Docker 国内镜像候选: $DOCKER_MIRROR_ORDER"
   else
     warn '未配置有效 Docker 国内镜像，将只尝试 Docker Hub 官方地址'
   fi
+}
+
+docker_mirror_order_for_image() {
+  image_preferred_mirrors=''
+  if [ "$DOCKER_MIRRORS" = "$DEFAULT_DOCKER_MIRRORS" ]; then
+    # 默认固定版本按国内实测的完整下载耗时排序。
+    case "$1" in
+      alpine/git:2.47.2|maven:3.9.9-eclipse-temurin-17|node:22.22.0-bookworm-slim|golang:1.22.12-bookworm)
+        image_preferred_mirrors='docker.1panel.live' ;;
+      mysql:5.7) image_preferred_mirrors='docker.m.daocloud.io' ;;
+      nginx:1.25-alpine|debian:bookworm-slim|docker:27-cli) image_preferred_mirrors='docker.m.daocloud.io docker.1panel.live' ;;
+      redis:7-alpine) image_preferred_mirrors='docker.1ms.run docker.1panel.live' ;;
+    esac
+  fi
+  for image_mirror in $image_preferred_mirrors; do
+    case " $DOCKER_MIRROR_ORDER " in *" $image_mirror "*) printf '%s\n' "$image_mirror" ;; esac
+  done
+  for image_mirror in $DOCKER_MIRROR_ORDER; do
+    case " $image_preferred_mirrors " in
+      *" $image_mirror "*) ;;
+      *) printf '%s\n' "$image_mirror" ;;
+    esac
+  done
 }
 
 dockerhub_mirror_image() {
@@ -1649,53 +1755,87 @@ local_image_matches_digest() {
 pull_docker_image() {
   pull_image_ref="$1"
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$IMAGE_PULL_TIMEOUT_SECONDS" docker pull "$pull_image_ref"
+    timeout -k 5s "${2:-$IMAGE_PULL_TIMEOUT_SECONDS}" docker pull "$pull_image_ref"
   else
     docker pull "$pull_image_ref"
   fi
 }
 
 probe_docker_image_manifest() {
-  manifest_probe_ref="$1"
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS" docker manifest inspect "$manifest_probe_ref" >/dev/null 2>&1
+  if docker buildx version >/dev/null 2>&1; then
+    set -- docker buildx imagetools inspect --raw "$1"
   else
-    docker manifest inspect "$manifest_probe_ref" >/dev/null 2>&1
+    set -- docker manifest inspect "$1"
   fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 2s "$IMAGE_MANIFEST_PROBE_TIMEOUT_SECONDS" "$@" >/dev/null 2>&1
+  else
+    "$@" >/dev/null 2>&1
+  fi
+}
+
+pull_docker_mirror() {
+  mirror_pull_ref="$1"; mirror_pull_image="$2"; mirror_pull_label="$3"; mirror_pull_digest="$4"
+  mirror_pull_timeout="$MIRROR_IMAGE_PULL_TIMEOUT_SECONDS"
+  case "$mirror_pull_ref" in
+    docker.1panel.live/*)
+      if [ -z "${AID_DOCKER_MIRROR_PULL_TIMEOUT_SECONDS:-${AID_IMAGE_PULL_TIMEOUT_SECONDS:-}}" ]; then
+        # 大镜像留出与 1Panel 公网完整下载和导入相匹配的时间。
+        case "$mirror_pull_image" in
+          maven:3.9.9-eclipse-temurin-17|node:22.22.0-bookworm-slim|golang:1.22.12-bookworm) mirror_pull_timeout=180 ;;
+        esac
+      fi ;;
+    esac
+  log "通过国内镜像下载 $mirror_pull_label: $mirror_pull_ref"
+  if ! pull_docker_image "$mirror_pull_ref" "$mirror_pull_timeout"; then
+    warn "$mirror_pull_label 镜像下载失败，继续下一个来源: $mirror_pull_ref"
+    return 1
+  fi
+  if [ -n "$mirror_pull_digest" ] && ! local_image_matches_digest "$mirror_pull_ref" "$mirror_pull_digest"; then
+    warn "$mirror_pull_label 镜像摘要与官方发布清单不一致，已拒绝来源: $mirror_pull_ref"
+    docker image rm "$mirror_pull_ref" >/dev/null 2>&1 || true
+    return 1
+  fi
+  docker tag "$mirror_pull_ref" "$mirror_pull_image" || die "$mirror_pull_label 镜像名称映射失败: $mirror_pull_image"
+  log "$mirror_pull_label 镜像下载成功: $mirror_pull_ref"
 }
 
 try_docker_mirrors() {
   mirror_try_image="$1"; mirror_try_label="$2"; mirror_try_digest="$3"
   resolve_docker_mirror_order
-  mirror_ready=''; mirror_deferred=''
-  for mirror_try_prefix in $DOCKER_MIRROR_ORDER; do
+  mirror_try_probes=''; mirror_try_deferred=''
+  for mirror_try_prefix in $(docker_mirror_order_for_image "$mirror_try_image"); do
     mirror_try_ref="$(dockerhub_mirror_image "$mirror_try_prefix" "$mirror_try_image" 2>/dev/null || true)"
     [ -n "$mirror_try_ref" ] || continue
-    if probe_docker_image_manifest "$mirror_try_ref"; then
-      log "Docker镜像清单可用: $mirror_try_ref"
-      mirror_ready="$mirror_ready$mirror_try_prefix "
-    else
-      warn "Docker镜像清单预检失败，保留为末位重试: $mirror_try_ref"
-      mirror_deferred="$mirror_deferred$mirror_try_prefix "
+    if [ -n "$mirror_try_digest" ]; then
+      mirror_try_ref="$(image_with_digest "$mirror_try_ref" "$mirror_try_digest")"
     fi
+    probe_docker_image_manifest "$mirror_try_ref" >/dev/null 2>&1 &
+    mirror_try_probes="$mirror_try_probes$!:${mirror_try_ref} "
   done
-  mirror_candidates="$mirror_ready$mirror_deferred"
-  mirror_candidates="${mirror_candidates% }"
-  for mirror_try_prefix in $mirror_candidates; do
-    mirror_try_ref="$(dockerhub_mirror_image "$mirror_try_prefix" "$mirror_try_image" 2>/dev/null || true)"
-    [ -n "$mirror_try_ref" ] || continue
-    log "通过国内镜像下载 $mirror_try_label: $mirror_try_ref"
-    if pull_docker_image "$mirror_try_ref"; then
-      if [ -z "$mirror_try_digest" ] || local_image_matches_digest "$mirror_try_ref" "$mirror_try_digest"; then
-        docker tag "$mirror_try_ref" "$mirror_try_image" || die "$mirror_try_label 镜像名称映射失败: $mirror_try_image"
-        log "$mirror_try_label 镜像下载成功: $mirror_try_prefix"
+  for mirror_try_probe in $mirror_try_probes; do
+    # 镜像引用可以包含端口和摘要，只切分 PID 后的第一个冒号。
+    mirror_try_ref="${mirror_try_probe#*:}"
+    if wait "${mirror_try_probe%%:*}"; then
+      log "Docker镜像清单可用: $mirror_try_ref"
+      if pull_docker_mirror "$mirror_try_ref" "$mirror_try_image" "$mirror_try_label" "$mirror_try_digest"; then
+        for mirror_try_other in $mirror_try_probes; do
+          [ "$mirror_try_other" != "$mirror_try_probe" ] || continue
+          mirror_try_pid="${mirror_try_other%%:*}"
+          if jobs -p | grep -Fxq "$mirror_try_pid"; then kill "$mirror_try_pid" 2>/dev/null || true; fi
+          wait "$mirror_try_pid" 2>/dev/null || true
+        done
         return 0
       fi
-      warn "$mirror_try_label 镜像摘要与官方发布清单不一致，已拒绝来源: $mirror_try_prefix"
-      docker image rm "$mirror_try_ref" >/dev/null 2>&1 || true
+    elif [ -n "$mirror_try_digest" ]; then
+      warn "Docker镜像固定摘要预检失败，跳过该来源: $mirror_try_ref"
     else
-      warn "$mirror_try_label 镜像下载失败，继续下一个来源: $mirror_try_prefix"
+      warn "Docker镜像清单预检失败，保留为末位重试: $mirror_try_ref"
+      mirror_try_deferred="$mirror_try_deferred$mirror_try_ref "
     fi
+  done
+  for mirror_try_ref in $mirror_try_deferred; do
+    if pull_docker_mirror "$mirror_try_ref" "$mirror_try_image" "$mirror_try_label" "$mirror_try_digest"; then return 0; fi
   done
   return 1
 }
@@ -1710,14 +1850,15 @@ ensure_docker_image() {
     fi
     warn "$label 本地镜像摘要不符合当前发布清单，将重新拉取: $image"
   fi
-  resolve_docker_mirror_order
   if [ -n "$digest" ]; then
     official_ref="$(image_with_digest "$image" "$digest")"
   else
     official_ref="$image"
     warn "$label 使用了自定义或未固定镜像，无法与官方发布摘要核对: $image"
   fi
-  for mirror_prefix in $DOCKER_MIRROR_ORDER; do
+  for mirror_prefix in $(printf '%s' "$DOCKER_MIRRORS" | tr -d '[:space:]' | tr ',' ' '); do
+    mirror_prefix="$(normalize_docker_mirror "$mirror_prefix" 2>/dev/null || true)"
+    [ -n "$mirror_prefix" ] || continue
     mirror_image="$(dockerhub_mirror_image "$mirror_prefix" "$image" 2>/dev/null || true)"
     if [ -n "$mirror_image" ] && docker image inspect "$mirror_image" >/dev/null 2>&1 \
         && { [ -z "$digest" ] || local_image_matches_digest "$mirror_image" "$digest"; }; then
@@ -1769,7 +1910,23 @@ safe_reset_work_dir() {
     "$DATA_ROOT"/source-build/*|/var/lib/aid-updater/work/*) ;;
     *) die "构建目录不在允许范围内: $WORK_DIR" ;;
   esac
-  rm -rf -- "$WORK_DIR"
+  [ "$(realpath -m -- "$WORK_DIR")" = "$WORK_DIR" ] || die "构建目录不是规范的实际路径: $WORK_DIR"
+  for protected_path in "$CACHE_DIR" "$OUTPUT"; do
+    case "$(realpath -m -- "$protected_path")" in
+      "$WORK_DIR"|"$WORK_DIR"/*) die "依赖缓存或输出包不能放在临时构建目录内: $protected_path" ;;
+    esac
+  done
+  if [ -e "$WORK_DIR" ]; then
+    # 空目录可以来自恢复。非空目录须有本构建器的归属标记，避免误删用户文件。
+    if [ "$(cat "$WORK_DIR/.aid-build-work" 2>/dev/null || true)" = AID_SOURCE_BUILD_WORK_V1 ]; then
+      rm -rf --one-file-system -- "$WORK_DIR"
+    else
+      rmdir -- "$WORK_DIR" || die "无法确认现有构建目录的归属: $WORK_DIR"
+    fi
+  fi
+  mkdir -p "$WORK_DIR"
+  WORK_DIR_OWNED=yes
+  printf '%s\n' AID_SOURCE_BUILD_WORK_V1 > "$WORK_DIR/.aid-build-work"
   mkdir -p "$WORK_DIR/repos" "$WORK_DIR/staging" "$CACHE_DIR"
 }
 
@@ -2525,6 +2682,9 @@ assemble_package() {
     sql/aid-init.sql; do
     copy_installer_file "$file"
   done
+  # This public seed is mounted read-only and loaded by a non-root MySQL user.
+  chmod 0755 -- "$STAGING_DIR/installer/sql" || die 'MySQL 初始化 SQL 目录权限设置失败'
+  chmod 0644 -- "$STAGING_DIR/installer/sql/aid-init.sql" || die 'MySQL 初始化 SQL 权限设置失败'
   manager_source="$SERVER_DIR/deploy/aid.sh"
   if [ ! -f "$SERVER_DIR/deploy/build-release-from-source.sh" ] && [ -n "${AID_MANAGER_SCRIPT:-}" ]; then
     manager_source="$AID_MANAGER_SCRIPT"
@@ -2587,6 +2747,7 @@ EOF
 
   mkdir -p "$(dirname "$OUTPUT")"
   output_part="$OUTPUT.part"
+  PACKAGE_PART="$output_part"
   checksum_part="$output_part.sha256"
   rm -f "$output_part" "$checksum_part"
   # 根目录成员使用规范名称（installer/...），避免不同 tar 实现对 ./installer

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Button, Input } from 'antd'
+import { Button, Input, Modal, Segmented } from 'antd'
 import { useAssistantBudgetRenewal } from '@/hooks/assistant/useAssistantBudgetRenewal'
 import type { AssistantSessionSnapshot } from '@/types/assistant-api'
 import type { AssistantRunBudgetPolicy, CanvasBudget } from '@/types/assistant-budget'
@@ -10,10 +10,57 @@ import { assistantBudgetCanRenew, assistantBudgetExpired, assistantBudgetRenewal
 import { assistantErrorCode, assistantErrorMessage } from '@/utils/assistant/assistantRequestCoordinator'
 import type { AssistantSessionStore } from '@/utils/assistant/assistantSessionStore'
 import { StudioCanvasAssistantBudget } from './StudioCanvasAssistantBudget'
+import { StudioWorkspaceModalProvider } from './StudioWorkspaceModalProvider'
+import './studio-canvas-assistant-settings.css'
 
-export function StudioCanvasBudgetDefaults({ budget, onSave }: {
+function isHistoricalRun(status?: string) {
+  return status != null && ['SUCCEEDED', 'COMPLETED', 'FAILED', 'STOPPED', 'CANCELLED'].includes(status)
+}
+
+type SettingsProps = {
+  open: boolean
+  onClose: () => void
+  snapshot?: AssistantSessionSnapshot | null
+  store: AssistantSessionStore
+  busy: boolean
+  budgetKey?: string | null
   budget?: CanvasBudget
   onSave: (value?: CanvasBudget) => void
+}
+
+export function StudioCanvasAssistantSettingsDialog({ open, ...props }: SettingsProps) {
+  return <StudioWorkspaceModalProvider rootClassName="create-flow-modal canvas-assistant-settings">
+    <Modal title="画布助手设置" open={open} onCancel={props.onClose} footer={null} width={520} destroyOnHidden>
+      <CanvasAssistantSettingsSections {...props} />
+    </Modal>
+  </StudioWorkspaceModalProvider>
+}
+
+function CanvasAssistantSettingsSections({
+  onClose, snapshot, store, busy, budgetKey, budget, onSave
+}: Omit<SettingsProps, 'open'>) {
+  const [section, setSection] = useState<'run' | 'defaults'>(() =>
+    snapshot?.activeRun && !isHistoricalRun(snapshot.activeRun.status) ? 'run' : 'defaults')
+  const hasRun = Boolean(snapshot?.activeRun)
+  const visibleSection = !hasRun ? 'defaults' : !budgetKey ? 'run' : section
+  return <>
+    {hasRun && budgetKey ? <Segmented block value={visibleSection} aria-label="预算范围"
+      options={[{ label: '本轮预算', value: 'run' }, { label: '后续预算', value: 'defaults' }]}
+      onChange={setSection} /> : null}
+    {snapshot?.activeRun ? <section hidden={visibleSection !== 'run'} className="canvas-assistant-settings__section">
+      <StudioCanvasAssistantSettings key={snapshot.sessionId} snapshot={snapshot} store={store} busy={busy} />
+    </section> : null}
+    <section hidden={visibleSection !== 'defaults'} className="canvas-assistant-settings__section">
+      {budgetKey ? <StudioCanvasBudgetDefaults key={budgetKey} budget={budget} onSave={onSave} onClose={onClose} />
+        : <p role="status">连接画布后可设置预算。</p>}
+    </section>
+  </>
+}
+
+export function StudioCanvasBudgetDefaults({ budget, onSave, onClose }: {
+  budget?: CanvasBudget
+  onSave: (value?: CanvasBudget) => void
+  onClose?: () => void
 }) {
   const [total, setTotal] = useState(budget?.absoluteMaxCharge ?? '')
   const [perCall, setPerCall] = useState(budget?.perCallMaxCharge ?? '')
@@ -35,11 +82,21 @@ export function StudioCanvasBudgetDefaults({ budget, onSave }: {
     }
     save({ absoluteMaxCharge, perCallMaxCharge })
   }}>
-    <p>设置此画布中新一轮助手运行的积分上限。</p>
-    <label>总上限（积分）<Input inputMode="decimal" value={total} onChange={event => { setTotal(event.target.value); setFeedback(undefined) }} /></label>
-    <label>单次上限（积分）<Input inputMode="decimal" value={perCall} onChange={event => { setPerCall(event.target.value); setFeedback(undefined) }} /></label>
-    <div><Button htmlType="submit" type="primary">保存预算</Button>{budget ? <Button type="text" onClick={() => save()}>恢复默认</Button> : null}</div>
-    {feedback ? <p role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p> : null}
+    <p className="canvas-assistant-settings__description">设置新一轮助手运行的积分上限。</p>
+    <div className="canvas-assistant-settings__fields">
+      <label>本轮总上限<Input inputMode="decimal" suffix="积分" status={feedback?.error ? 'error' : undefined}
+        value={total} onChange={event => { setTotal(event.target.value); setFeedback(undefined) }} /></label>
+      <label>单次执行上限<Input inputMode="decimal" suffix="积分" status={feedback?.error ? 'error' : undefined}
+        value={perCall} onChange={event => { setPerCall(event.target.value); setFeedback(undefined) }} /></label>
+    </div>
+    {feedback ? <p className="canvas-assistant-settings__feedback" role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p> : null}
+    <div className="canvas-assistant-settings__actions">
+      {budget ? <Button className="canvas-assistant-settings__restore" type="text" onClick={() => save()}>恢复默认</Button> : null}
+      <div className="canvas-assistant-settings__primary-actions">
+        {onClose ? <Button onClick={onClose}>取消</Button> : null}
+        <Button htmlType="submit" type="primary">保存预算</Button>
+      </div>
+    </div>
   </form>
 }
 
@@ -56,7 +113,7 @@ export function StudioCanvasAssistantSettings({ snapshot, store, busy }: {
   const result = read && read.runId === runId && read.revision === revision ? read : undefined
   const budget = result?.budget ?? null
   const expired = assistantBudgetExpired(budget)
-  const historical = !!run && ['SUCCEEDED', 'COMPLETED', 'FAILED', 'STOPPED', 'CANCELLED'].includes(run.status)
+  const historical = isHistoricalRun(run?.status)
   const { revise, renewing, renewalNotice } = useAssistantBudgetRenewal(snapshot, budget, store,
     busy || historical || run?.stopRequested === true, () => setRefresh(value => value + 1))
 
@@ -84,12 +141,15 @@ export function StudioCanvasAssistantSettings({ snapshot, store, busy }: {
   }, [budget, expired])
 
   return <div className="assistant-panel">
-    <p>调整本轮画布助手的积分上限、执行方式和授权期限。</p>
+    <p className="canvas-assistant-settings__description">调整本轮的积分上限、执行方式和授权期限。</p>
     {!runId || result && !budget && !result.error ? <p role="status">发送一条创作消息后，即可在这里调整本轮生成预算。</p> : null}
     {runId && !result ? <p role="status">正在读取生成预算…</p> : null}
     {result?.error ? <div role="alert"><p>{result.error}</p><Button onClick={() => { setRead(undefined); setRefresh(value => value + 1) }}>重新读取</Button></div> : null}
     {budget ? <>
-      <p>已使用 {budget.settled} · 已预留 {budget.reserved} · 剩余 {budget.remaining} 积分</p>
+      <dl className="canvas-assistant-settings__usage">
+        {[['已使用', budget.settled], ['已预留', budget.reserved], ['剩余积分', budget.remaining]].map(([label, value]) =>
+          <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+      </dl>
       {historical ? <p role="status">本轮已结束。开始新一轮后可调整新一轮的生成预算。</p>
         : expired && !assistantBudgetCanRenew(budget) ? <p role="status">{assistantBudgetRenewalBlockReason(budget)}</p>
         : budget.availableRunBudgetScope ? <StudioCanvasAssistantBudget

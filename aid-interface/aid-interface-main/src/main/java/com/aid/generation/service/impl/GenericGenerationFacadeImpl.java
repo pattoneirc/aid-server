@@ -67,6 +67,7 @@ public class GenericGenerationFacadeImpl implements IGenericGenerationFacade {
     private final IMediaGenerationService mediaGenerationService;
     private final MediaBillingQuoteService mediaBillingQuoteService;
     private final GenerationResourceResolver resourceResolver;
+    private final com.aid.common.aid.oss.util.MediaUrlResolver mediaUrlResolver;
     private final GenerationConversationStore conversationStore;
     private final GenerationTargetBindingService targetBindingService;
     private final CanvasMapper canvasMapper;
@@ -775,7 +776,7 @@ public class GenericGenerationFacadeImpl implements IGenericGenerationFacade {
         mediaRequest.setAudioType(request.getAudioType());
         mediaRequest.setVoiceId(request.getVoiceId());
         Map<String, Object> options = resourceResolver.sanitizeParameters(request.getParameters());
-        com.aid.generation.service.GenerationVideoReferences.apply(mediaRequest, resources, options);
+        com.aid.generation.service.GenerationVideoReferences.apply(mediaRequest, resources, options, mediaUrlResolver);
         return new VideoInvocation(mediaRequest, List.copyOf(resources));
     }
 

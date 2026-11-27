@@ -16,6 +16,8 @@ type RecordCacheEntry = {
   data?: StoryboardRecordRow[]
 }
 
+type StoryboardRecordReadOptions = { force?: boolean; afterWrite?: boolean }
+
 const projectRecordCache = new Map<string, RecordCacheEntry>()
 
 function recordCacheKey(ctx: ProjectEpisodeContext, type: StoryboardRecordListType): string {
@@ -50,13 +52,13 @@ export function groupStoryboardRecordsByStoryboardId(
 export async function fetchProjectStoryboardRecords(
   ctx: ProjectEpisodeContext,
   type: StoryboardRecordListType,
-  options?: { force?: boolean }
+  options?: StoryboardRecordReadOptions
 ): Promise<StoryboardRecordRow[]> {
   const key = recordCacheKey(ctx, type)
   const cached = projectRecordCache.get(key)
-  if (cached?.promise) return cached.promise
+  if (!options?.afterWrite && cached?.promise) return cached.promise
 
-  if (!options?.force) {
+  if (!options?.force && !options?.afterWrite) {
     if (cached?.data) return cached.data
   } else {
     // SSE/写操作后强制刷新只绕过结果缓存；相同业务键的进行中请求必须复用。
@@ -69,9 +71,13 @@ export async function fetchProjectStoryboardRecords(
     episodeId: ctx.episodeId,
     type
   }).then((rows) => {
-    if (projectRecordCache.get(key) === entry) {
+    const current = projectRecordCache.get(key)
+    if (current === entry) {
       entry.promise = undefined
       entry.data = rows
+    } else if (current) {
+      // A read that started before a write must not publish its older snapshot afterward.
+      return current.promise ?? current.data ?? rows
     }
     return rows
   })
@@ -92,7 +98,7 @@ export async function fetchStoryboardRecordsForStoryboard(
   ctx: ProjectEpisodeContext,
   storyboardId: number,
   type: StoryboardRecordListType,
-  options?: { force?: boolean }
+  options?: StoryboardRecordReadOptions
 ): Promise<StoryboardRecordRow[]> {
   const sid = Number(storyboardId)
   if (!Number.isFinite(sid) || sid <= 0) return []

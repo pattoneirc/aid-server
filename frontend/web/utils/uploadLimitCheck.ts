@@ -2,7 +2,7 @@
  * 按 /auth/public-config 的 upload 块做上传前本地校验。
  * 未配置分类型时回退 globalMaxSizeMb / globalAllowedExtensions。
  */
-import type { AuthUploadPublicConfig } from '~/types/business-api';
+import type { AuthUploadPublicConfig, AuthUploadTypeLimit } from '~/types/business-api';
 
 export type UploadLimitCheckResult =
   | { ok: true }
@@ -28,6 +28,22 @@ function mbToBytes(mb: number): number {
   return Math.max(0, mb) * 1024 * 1024
 }
 
+function findUploadTypeLimit(limits: AuthUploadTypeLimit[], extension: string) {
+  return limits.find(limit =>
+    Array.isArray(limit.extensions) && limit.extensions.some(
+      value => String(value || '').replace(/^\./, '').toLowerCase() === extension
+    )
+  )
+}
+
+/** 单个文件扩展名的大小上限，与上传校验使用的匹配顺序一致。 */
+export function getUploadMaxSizeMb(config: AuthUploadPublicConfig | null | undefined, extension: string): number | null {
+  if (!config) return null
+  const limits = Array.isArray(config.typeLimits) ? config.typeLimits : []
+  const typeLimit = findUploadTypeLimit(limits, extension.replace(/^\./, '').toLowerCase())
+  const maxMb = Number(limits.length ? typeLimit?.maxSizeMb : config.globalMaxSizeMb)
+  return Number.isFinite(maxMb) && maxMb > 0 ? maxMb : null
+}
 /**
  * 校验单文件是否符合公开配置的上传限制。
  * config 为空时放行（由服务端兜底校验）。
@@ -42,11 +58,7 @@ export function checkFileAgainstUploadLimits(
   const typeLimits = Array.isArray(config.typeLimits) ? config.typeLimits : []
 
   if (typeLimits.length) {
-    const hit = typeLimits.find((t) =>
-      (Array.isArray(t.extensions) ? t.extensions : [])
-        .map((e) => String(e || '').replace(/^\./, '').toLowerCase())
-        .includes(ext)
-    )
+    const hit = findUploadTypeLimit(typeLimits, ext)
     if (!hit) {
       return { ok: false, message: '文件类型错误' }
     }

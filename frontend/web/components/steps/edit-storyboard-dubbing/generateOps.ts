@@ -170,7 +170,7 @@ export function buildDubbingGenerateParams(
 export async function runDubbingGenerateForScene(
   ctx: DubbingModalCtx,
   sceneIdx: number,
-  opts?: { resumeComposeJob?: StoryboardDubbingComposeJob; silentComplete?: boolean }
+  opts?: { resumeComposeJob?: StoryboardDubbingComposeJob; silentComplete?: boolean; referenceAudioId?: number }
 ) {
   const S = ctx.state
   const storyboardId = resolveStoryboardIdForIndex(ctx, sceneIdx)
@@ -181,6 +181,7 @@ export async function runDubbingGenerateForScene(
     storyboardId,
     async () => {
       const params = buildDubbingGenerateParams(ctx, sceneIdx)
+      if (params && opts?.referenceAudioId) params.referenceAudioId = opts.referenceAudioId
       const lipSync = opts?.resumeComposeJob?.lipSync ?? params?.lipSync ?? false
       if (!opts?.resumeComposeJob && !params) return
 

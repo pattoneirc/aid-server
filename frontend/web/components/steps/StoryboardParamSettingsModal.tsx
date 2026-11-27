@@ -79,7 +79,7 @@ interface Props {
 /** 原 defineExpose 能力（forwardRef + useImperativeHandle） */
 export interface StoryboardParamSettingsModalHandle {
   isOpen: () => boolean
-  appendDraftImages: (type: AssetCategoryKey | 'other', items: any[]) => void
+  appendDraftImages: (type: AssetCategoryKey | 'other', items: any[], syncPrompt?: boolean) => void
   appendDraftReferences: (items: any[]) => void
   setDraftReference: (item: any) => void
 }
@@ -293,7 +293,7 @@ export const StoryboardParamSettingsModal = forwardRef<StoryboardParamSettingsMo
       }
     }
 
-    function appendDraftImages(type: AssetCategoryKey | 'other', items: any[]) {
+    function appendDraftImages(type: AssetCategoryKey | 'other', items: any[], syncPrompt = true) {
       if (!items?.length) return
       const list = items.map((item) => ({
         ...item,
@@ -328,7 +328,7 @@ export const StoryboardParamSettingsModal = forwardRef<StoryboardParamSettingsMo
         const asset = findPromptAssetForGridItem(gridItem, draftRef.current)
         if (asset) newAssets.push(asset)
       }
-      if (newAssets.length && enableDraftPromptAssetRefs) {
+      if (newAssets.length && enableDraftPromptAssetRefs && syncPrompt) {
         onSyncAssetRefs?.(newAssets)
       }
     }
@@ -455,6 +455,11 @@ export const StoryboardParamSettingsModal = forwardRef<StoryboardParamSettingsMo
               ) : (
                 /* 分镜图 / 多参生视频：多个上传按钮 */
                 <div className="spsm-upload-row">
+                  {mode === 'storyboard' && onImportReference ? <button
+                    type="button" className="spsm-upload-btn" onClick={onImportReference}>
+                    <img src={dialogAddIcon} alt="" />
+                    <div>导入图片</div>
+                  </button> : null}
                   {uploadCategories.map((cat) => (
                     <button
                       key={cat.key}

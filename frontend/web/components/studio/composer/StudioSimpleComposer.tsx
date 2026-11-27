@@ -22,7 +22,7 @@ function StudioSimpleTextComposer({ node: original }: { node: StudioCanvasNode }
   const ordinaryModels = useStudioModels('text', { enabled: Boolean(canvasRuntime && original.data.kind === 'text' && !describingImage), canvas: Boolean(canvasRuntime) })
   const describeModels = useStudioCanvasModelsByFunc('canvas.text.image_describe', String(canvasRuntime?.project?.projectId || ''), Boolean(canvasRuntime && describingImage))
   const textModels = describingImage ? describeModels : ordinaryModels
-  const { node, commit: commitModel } = useCanvasComposerModel(original, textModels.data, { enabled: Boolean(canvasRuntime && original.data.kind === 'text'), loading: textModels.loading, preferredModelCode: describeModels.defaultModelCode })
+  const { node, commit: commitModel } = useCanvasComposerModel(original, textModels.data, { enabled: Boolean(canvasRuntime && original.data.kind === 'text'), loading: textModels.loading, preferredModelCode: textModels.defaultModelCode })
   const updateNodeData = useStudioUiStore((state) => state.updateNodeData)
   const canGenerateText = original.data.kind === 'text' && Boolean(canvasRuntime)
   return (

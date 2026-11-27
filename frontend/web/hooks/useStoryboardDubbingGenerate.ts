@@ -6,13 +6,11 @@ import {
   userAssetCenterDetail,
   userComposeStatus,
   userComposeVoiceover,
-  userModelList,
   userStoryboardLipSync
 } from '~/utils/businessApi'
 import { openRechargeModalFromInsufficientBalance } from '~/utils/api'
 import { resolveStoryScriptSaveContext } from '~/utils/storyScriptSaveContext'
 import { htmlToPlainPreserveLineBreaks } from '~/utils/htmlPlain'
-import { checkMiniMaxTtsTextLength } from '~/utils/ttsTextLimit'
 import { useCreationStore } from '~/stores/creation'
 import type { ComposeStatusResult, StoryboardLipSyncRequest, VoiceoverParam } from '~/types/business-api'
 import {
@@ -24,6 +22,7 @@ import {
 
 export interface StoryboardDubbingGenerateParams {
   storyboardId?: number
+  referenceAudioId?: number
   dialogue: string
   voiceName: string
   voiceLibraryId?: number
@@ -203,6 +202,7 @@ export function buildLipSyncRequest(
     throw new Error('分镜信息异常')
   }
 
+  if (params.referenceAudioId) return { storyboardId, referenceAudioId: params.referenceAudioId }
   const body: StoryboardLipSyncRequest = { storyboardId }
   const voiceLibraryId = Number(params.voiceLibraryId)
   if (Number.isFinite(voiceLibraryId) && voiceLibraryId > 0) {
@@ -229,6 +229,13 @@ export type SubmitStoryboardDubbingResult =
   | { mode: 'lipSync'; taskId: number }
   | { mode: 'mock' }
 
+async function submitLipSync(params: StoryboardDubbingGenerateParams): Promise<SubmitStoryboardDubbingResult> {
+  const accepted = await userStoryboardLipSync(buildLipSyncRequest(params))
+  const taskId = Number(accepted?.taskId)
+  if (!Number.isFinite(taskId) || taskId <= 0) throw new Error('对口型任务创建失败')
+  return { mode: 'lipSync', taskId }
+}
+
 export async function submitStoryboardDubbingGenerateTask(
   params: StoryboardDubbingGenerateParams
 ): Promise<SubmitStoryboardDubbingResult> {
@@ -241,25 +248,11 @@ export async function submitStoryboardDubbingGenerateTask(
     throw new Error('分镜信息异常')
   }
 
+  if (params.referenceAudioId) return submitLipSync(params)
+
   const dialogue = htmlToPlainPreserveLineBreaks(params.dialogue).trim()
   if (!dialogue) {
     throw new Error('请输入配音台词')
-  }
-
-  // MiniMax 音色：单条配音文本最多 10000 字符
-  {
-    const hints: Array<string | null | undefined> = [params.timbreCode, params.voiceName]
-    if (params.voiceModelId) {
-      try {
-        const models = await userModelList({ modelType: 'audio' })
-        const hit = models.find((m) => Number(m.id) === Number(params.voiceModelId))
-        if (hit) hints.push(hit.providerName, hit.modelCode, hit.modelName)
-      } catch {
-        /* ignore */
-      }
-    }
-    const tooLong = checkMiniMaxTtsTextLength(dialogue, hints)
-    if (tooLong) throw new Error(tooLong)
   }
 
   let projectId = params.projectId
@@ -278,15 +271,7 @@ export async function submitStoryboardDubbingGenerateTask(
     }
   }
 
-  if (params.lipSync) {
-    const lipBody = buildLipSyncRequest(params)
-    const accepted = await userStoryboardLipSync(lipBody)
-    const taskId = Number(accepted?.taskId)
-    if (!Number.isFinite(taskId) || taskId <= 0) {
-      throw new Error('对口型任务创建失败')
-    }
-    return { mode: 'lipSync', taskId }
-  }
+  if (params.lipSync) return submitLipSync(params)
 
   const voiceover = buildComposeVoiceoverParam(params, dialogue)
 

@@ -1,10 +1,12 @@
+import { canvasModelPromptPolicy } from './canvasModelInputValidation'
 import type { CanvasResource } from '@/types/canvas-api'
 import type { UserModelListItem } from '@/types/business-api'
 import type { UserGenerationKind } from '@/types/generation-api'
 import type { StudioCanvasNode } from '@/types/studio'
 import { modelForCapability } from '@/utils/modelCapability'
+import { canvasResourceMatchesNodeMedia } from '@/utils/canvas/canvasCurrentResultResource'
 import {
-  buildCanvasGenerationReferences, buildCanvasGenerationRequest, buildCanvasTextNodeReferences,
+  assertCanvasReferenceTransport, buildCanvasGenerationReferences, buildCanvasGenerationRequest, buildCanvasTextNodeReferences,
   canvasGenerationReferenceRole, prepareCanvasVideoGenerationReferences, validateCanvasGenerationReferenceLimits,
   type CanvasGenerationMediaType, type CanvasGenerationReferenceCandidate
 } from './canvasGeneration'
@@ -53,7 +55,7 @@ export function buildStudioCanvasGenerationQuote(input: {
     if (!source) return undefined
     const ids = [source.data.canvasPrimaryResourceId, ...(source.data.canvasResourceIds ?? [])]
     return ids.map(resourceId).filter((id): id is string => Boolean(id)).map(snapshot.resource)
-      .find(resource => resource?.mediaType === wanted && (!source.data.mediaUrl || resource.resourceUrl === source.data.mediaUrl))
+      .find(resource => resource?.mediaType === wanted && (!source.data.mediaUrl || canvasResourceMatchesNodeMedia(resource, source.data)))
   }
   const requireResource = (resource: CanvasResource | undefined, title: string, wanted: string) => {
     if (!resource || resource.mediaType !== wanted || !resourceId(resource.resourceId)) {
@@ -78,8 +80,7 @@ export function buildStudioCanvasGenerationQuote(input: {
     if (ref.kind === 'library' && ref.mediaKind === 'text') continue
     if (ref.inputError) throw new CanvasQuoteReferenceNotReadyError(ref.inputError)
     const wanted = ref.mediaKind === 'text' ? 'DOCUMENT' : ref.mediaKind.toUpperCase()
-    if (kind === 'image' && wanted !== 'IMAGE' && !(ref.mediaKind === 'text' && ref.nodeId)) continue
-    if (kind === 'video' && !['IMAGE', 'VIDEO', 'AUDIO'].includes(wanted) && !(ref.mediaKind === 'text' && ref.nodeId)) continue
+    if (!(ref.mediaKind === 'text' && ref.nodeId)) assertCanvasReferenceTransport(kind, ref.mediaKind.toUpperCase(), ref.title)
     const source = snapshot.nodes.find(item => item.id === ref.nodeId)
     if (ref.nodeId && ref.mediaKind === 'text') {
       const version = snapshot.version(ref.nodeId)
@@ -100,8 +101,10 @@ export function buildStudioCanvasGenerationQuote(input: {
   const submittedIds = new Set(prepared.references.map(ref => ref.resourceId))
   const hasImageReference = candidates.some(item => item.mediaType === 'IMAGE' && submittedIds.has(item.resourceId))
   let capabilityCode: string | undefined
-  if (kind === 'text') capabilityCode = model.capabilityCode || undefined
-  else if (kind === 'video') {
+  if (kind === 'text') {
+    capabilityCode = model.capabilityCode || undefined
+    validateCanvasGenerationReferenceLimits(model, capabilityCode ?? '', prepared.references, candidates)
+  } else if (kind === 'video') {
     const videoCapability = resolveCanvasVideoCapability({
       node,
       model,
@@ -119,7 +122,7 @@ export function buildStudioCanvasGenerationQuote(input: {
     projectId: snapshot.projectId, workspaceId: snapshot.workspaceId,
     clientRequestId: 'canvas_quote_preview', capabilityCode,
     // 选型占位只进入只读报价，发送按钮仍沿用真实输入必填规则。
-    prompt: prompt.trim() ? prompt : kind === 'image' ? '图片报价' : kind === 'video' ? '生成' : prompt,
+    prompt: prompt.trim() || canvasModelPromptPolicy(model, capabilityCode).optional ? prompt : kind === 'image' ? '图片报价' : kind === 'video' ? '生成' : prompt,
     references: prepared.references, nodeReferences: textNodes?.nodeReferences,
     session: kind === 'text' && input.sessionId ? { sessionId: input.sessionId } : undefined
   })

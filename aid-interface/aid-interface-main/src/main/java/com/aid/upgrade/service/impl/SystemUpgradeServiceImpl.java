@@ -17,6 +17,7 @@ import com.aid.aid.service.IAidConfigService;
 import com.aid.common.aid.core.service.ConfigService;
 import com.aid.common.constant.CacheConstants;
 import com.aid.common.core.redis.RedisCache;
+import com.aid.common.constant.HttpStatus;
 import com.aid.common.exception.ServiceException;
 import com.aid.common.utils.DateUtils;
 import com.aid.upgrade.client.UpdaterClient;
@@ -402,7 +403,6 @@ public class SystemUpgradeServiceImpl implements ISystemUpgradeService {
         JSONObject task = buildTask("UPGRADE", currentVersion, manifest.getProductVersion());
         task.put("manifestUrl", snapshot.sourceUrl);
         task.put("buildFromSource", true);
-        task.put("keepBackups", resolveKeepBackups());
         updaterClient.submitTask(task);
         log.info("已受理一键升级任务, current={}, target={}", currentVersion, manifest.getProductVersion());
         return StrUtil.format("升级任务已受理：{} → {}", currentVersion, manifest.getProductVersion());
@@ -451,12 +451,15 @@ public class SystemUpgradeServiceImpl implements ISystemUpgradeService {
     }
 
     private String submitDeploymentConfigTask(String action, DeploymentConfigSaveDto saveDto) {
-        requireConfigCapableUpdater();
         if (Objects.isNull(saveDto)) {
             log.error("提交部署配置任务失败, 参数为空");
-            throw new ServiceException("参数不完整");
+            throw new ServiceException("参数不完整", HttpStatus.BAD_REQUEST);
         }
         JSONObject values = buildDeploymentConfigValues(saveDto);
+        if ("CONFIG_APPLY".equals(action) && values.isEmpty()) {
+            throw new ServiceException("请提交至少一项要应用的部署配置", HttpStatus.BAD_REQUEST);
+        }
+        requireConfigCapableUpdater();
         JSONObject task = buildTask(action, currentVersion, currentVersion);
         if (Objects.nonNull(saveDto.getConfigPath())) {
             task.put("configPath", saveDto.getConfigPath().trim());
@@ -551,6 +554,16 @@ public class SystemUpgradeServiceImpl implements ISystemUpgradeService {
             log.error("版本回退被拒绝, 升级器状态={}", updater.getStatus());
             throw new ServiceException("升级器不可用");
         }
+        if (StrUtil.isNotBlank(requestDto.getBackupId())) {
+            String id = requestDto.getBackupId();
+            if (!id.matches("[0-9]{14}\\.[0-9]{9}-(upgrade|rollback)-[A-Za-z0-9._-]+")) {
+                throw new ServiceException("本机备份编号无效");
+            }
+            JSONObject task = buildTask("ROLLBACK", currentVersion, requestDto.getTargetVersion().trim());
+            task.put("backupId", id);
+            updaterClient.submitTask(task);
+            return "本机备份恢复任务已受理";
+        }
         ManifestSnapshot snapshot = loadManifestSnapshot(true);
         UpgradeManifest.RollbackRelease release = findRollbackRelease(snapshot.manifest,
                 requestDto.getTargetVersion().trim());
@@ -580,10 +593,31 @@ public class SystemUpgradeServiceImpl implements ISystemUpgradeService {
         task.put("databaseCompatible", release.getDatabaseCompatible());
         task.put("databaseRollback", release.getDatabaseRollback());
         task.put("backupRequired", true);
-        task.put("keepBackups", resolveKeepBackups());
         updaterClient.submitTask(task);
         log.info("已受理版本回退任务, current={}, target={}", currentVersion, release.getVersion());
         return StrUtil.format("回退任务已受理：{} → {}", currentVersion, release.getVersion());
+    }
+
+    @Override
+    public JSONObject getVersionBackups() {
+        return updaterClient.readVersionBackups();
+    }
+
+    @Override
+    public String saveVersionBackupSettings(UpgradeSourceSaveDto saveDto) {
+        if (saveDto == null || StrUtil.isBlank(saveDto.getBackupDir()) || saveDto.getKeepBackups() == null
+                || saveDto.getKeepBackups() < UpgradeConfigKeys.MIN_KEEP_BACKUPS
+                || saveDto.getKeepBackups() > UpgradeConfigKeys.MAX_KEEP_BACKUPS) {
+            throw new ServiceException("请填写备份目录和有效的保留份数");
+        }
+        if (!updaterClient.detect().isReady() || updaterClient.readVersionBackups().isEmpty()) {
+            throw new ServiceException("升级器未就绪或未支持本机备份设置");
+        }
+        JSONObject task = buildTask("BACKUP_SETTINGS", currentVersion, currentVersion);
+        task.put("backupDir", saveDto.getBackupDir().trim());
+        task.put("keepBackups", saveDto.getKeepBackups());
+        updaterClient.submitTask(task);
+        return "已提交备份设置校验";
     }
 
     private UpgradeManifest.RollbackRelease findRollbackRelease(UpgradeManifest manifest, String targetVersion) {

@@ -51,7 +51,7 @@ function PromptAssistantDialog({ prompt, mediaKind = 'image', onApply, onClose }
   const alive = useRef(true)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const models = useStudioModels('text', { enabled: true, canvas: true })
-  const selectedModel = modelCode ? models.data.find(item => item.modelCode === modelCode) : pickStudioComposerDefaultModel(models.data)
+  const selectedModel = modelCode ? models.data.find(item => item.modelCode === modelCode) : pickStudioComposerDefaultModel(models.data, [models.defaultModelCode])
   const request = selectedModel && input.trim() ? promptOptimizationRequest(selectedModel.modelCode, input, mediaKind) : null
   const quote = useCanvasQuote('prompt-optimization', request, (body, signal) => userGenerationQuote('text', body, signal))
   const disabledReason = loading ? '正在优化提示词' : models.loading ? '正在读取文本模型' : models.error

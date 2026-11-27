@@ -3,6 +3,7 @@ import { allowedParameterOptions, modelParameterConstraints } from '~/utils/mode
 
 export interface ModelCapabilitySnapshot {
   aspectRatioOptions: string[]
+  aspectRatioFromPixelSize?: boolean
   sizeOptions: string[]
   maxOutputCount: number
   defaultAspectRatio: string
@@ -355,6 +356,7 @@ export function parseModelCapability(item?: UserModelListItem | null, parameters
 
   const snapshot: ModelCapabilitySnapshot = {
     aspectRatioOptions,
+    aspectRatioFromPixelSize: item?.supportsAspectRatio === false && sizeOptions.some((size) => /^\d+x\d+$/.test(size)),
     sizeOptions: sizeOptions.length ? sizeOptions : [...DEFAULT_SIZE_OPTIONS],
     maxOutputCount,
     defaultAspectRatio,
@@ -398,9 +400,26 @@ export function parseVideoQualityOptions(item?: UserModelListItem | null): strin
 }
 
 export function buildAspectRatioSelectOptions(
-  snapshot: ModelCapabilitySnapshot
+  snapshot: ModelCapabilitySnapshot,
+  size?: string
 ): SelectOption<string>[] {
+  if (snapshot.aspectRatioFromPixelSize) {
+    const ratio = imagePixelAspectRatio(size || snapshot.defaultSize)
+    if (ratio) return [{ value: ratio, label: ratio }]
+  }
   return snapshot.aspectRatioOptions.map((value) => ({ value, label: value }))
+}
+
+function imagePixelAspectRatio(size: string): string | undefined {
+  const match = /^(\d+)x(\d+)$/.exec(normalizeSizeCode(size))
+  if (!match) return undefined
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!width || !height) return undefined
+  let a = width
+  let b = height
+  while (b) [a, b] = [b, a % b]
+  return `${width / a}:${height / a}`
 }
 
 export function buildCountSelectOptions(snapshot: ModelCapabilitySnapshot): SelectOption<number>[] {
@@ -532,9 +551,16 @@ export function coerceGenerationSettings(
   snapshot: ModelCapabilitySnapshot,
   opts?: { include3k?: boolean }
 ): { aspectRatio: string; count: number; quality: string } {
-  const ratios = buildAspectRatioSelectOptions(snapshot)
   const counts = buildCountSelectOptions(snapshot)
   const qualities = buildQualitySelectOptions(snapshot, opts)
+
+  let quality = normalizeSizeCode(current.quality)
+  if (!qualities.some((option) => option.value === quality)) {
+    quality = qualities.some((option) => option.value === snapshot.defaultSize)
+      ? snapshot.defaultSize
+      : qualities[0]?.value ?? '2k'
+  }
+  const ratios = buildAspectRatioSelectOptions(snapshot, quality)
 
   let aspectRatio = current.aspectRatio
   if (!ratios.some((o) => o.value === aspectRatio)) {
@@ -548,13 +574,6 @@ export function coerceGenerationSettings(
     count = counts.some((o) => o.value === snapshot.defaultOutputCount)
       ? snapshot.defaultOutputCount
       : counts[0]?.value ?? 1
-  }
-
-  let quality = normalizeSizeCode(current.quality)
-  if (!qualities.some((o) => o.value === quality)) {
-    quality = qualities.some((o) => o.value === snapshot.defaultSize)
-      ? snapshot.defaultSize
-      : qualities[0]?.value ?? '2k'
   }
 
   return { aspectRatio, count, quality }

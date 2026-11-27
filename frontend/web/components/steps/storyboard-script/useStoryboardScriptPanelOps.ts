@@ -3,6 +3,8 @@
 import type { MutableRefObject } from 'react'
 import { Modal, message } from 'antd'
 import { useCreationStore } from '~/stores/creation'
+import type { StoryboardImageReference } from '~/types/business-api'
+import { invalidateUserStoryboardDetailCache } from '~/utils/storyboardDetailOnce'
 import {
   STORYBOARD_WORKBENCH_NEED_PROJECT_MSG,
   useStoryboardWorkbenchMutations
@@ -30,6 +32,7 @@ import { useStoryboardScriptPanelUiState } from './useStoryboardScriptPanelUiSta
 interface StoryboardScriptModalSavePayload {
   title: string
   content: string
+  scriptImageReferences?: StoryboardImageReference[]
 }
 
 export function useStoryboardScriptPanelOps(opts: {
@@ -287,17 +290,17 @@ export function useStoryboardScriptPanelOps(opts: {
 
   const handleSaveStoryboardScript = async (payload: StoryboardScriptModalSavePayload) => {
     const idx = currentScriptPanelIndexRef.current
-    if (idx < 0 || idx >= panelsRef.current.length) return
+    if (idx < 0 || idx >= panelsRef.current.length) return false
 
     const ctx = await wb.getProjectEpisodeContext()
     if (!ctx) {
       message.warning(STORYBOARD_WORKBENCH_NEED_PROJECT_MSG)
-      return
+      return false
     }
     const sid = wb.parseServerStoryboardId(panelsRef.current[idx]!.id)
     if (sid == null) {
       message.warning('该分镜未同步到服务器，无法保存脚本，请刷新分镜列表后重试')
-      return
+      return false
     }
 
     const nextTitle = payload.title?.trim() || panelsRef.current[idx]!.title || '未命名'
@@ -305,16 +308,13 @@ export function useStoryboardScriptPanelOps(opts: {
     const nextPanels = panelsRef.current.map((panel, i) =>
       i === idx ? { ...panel, title: nextTitle, scriptContent: nextContent } : panel
     )
-    onChangeRef.current(nextPanels)
-    setShowStoryboardScriptModal(false)
-    clearEditScriptTooltipStateRef.current()
-
     const updated = nextPanels[idx]!
     try {
       const storyScript = wb.scriptHtmlToStoryScriptApi(nextContent)
       await wb.saveRemote({
         id: sid,
         title: nextTitle,
+        ...(payload.scriptImageReferences !== undefined ? { scriptImageReferences: payload.scriptImageReferences } : {}),
         ...(storyScript !== undefined ? { storyScript } : {}),
         ...(updated.dialogueText != null && String(updated.dialogueText).trim()
           ? { dialogueText: String(updated.dialogueText).trim() }
@@ -322,8 +322,14 @@ export function useStoryboardScriptPanelOps(opts: {
       })
     } catch (e: unknown) {
       message.warning(`脚本同步失败：${storyboardApiErr(e)}`)
+      return false
     }
+    invalidateUserStoryboardDetailCache(sid)
+    onChangeRef.current(nextPanels)
+    setShowStoryboardScriptModal(false)
+    clearEditScriptTooltipStateRef.current()
     message.success('分镜脚本已保存')
+    return true
   }
 
   const handleStoryboardUpdate = async (sceneIndex: number, data: any) => {

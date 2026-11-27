@@ -87,12 +87,20 @@ export function clearDubbingLipSyncLocal(ctx: DubbingModalCtx, sceneIdx: number)
 
 export async function onStartDubbingPrepare(
   ctx: DubbingModalCtx,
-  payload: { mode: 'tts' | 'upload'; localFile: File | null }
+  payload: { mode: 'tts' | 'upload'; localFile: File | null; referenceAudioId?: number }
 ) {
   const S = ctx.state
   persistCurrentDraft(ctx)
   const i = S.currentSceneIndex.get()
   if (payload.mode === 'upload') {
+    const referenceAudioId = payload.referenceAudioId
+    if (referenceAudioId) {
+      confirmDubbingGeneration(
+        () => runDubbingGenerateForScene(ctx, i, { referenceAudioId }),
+        { useRecording: true }
+      )
+      return
+    }
     S.pendingDubbingByIndex.set({ ...S.pendingDubbingByIndex.get(), [i]: true })
     S.pendingPayloadByIndex.set({ ...S.pendingPayloadByIndex.get(), [i]: payload })
     message.info('可在右侧点击「设置分镜音画同步结果」确认提交')
@@ -106,30 +114,6 @@ export async function onStartDubbingPrepare(
   if (S.draftVoiceLibraryId.get() <= 0 && S.draftVoiceModelId.get() <= 0) {
     message.warning('请选择音色')
     return
-  }
-  // MiniMax 前端预检（最终以后端为准）
-  {
-    const { checkMiniMaxTtsTextLength } = await import('~/utils/ttsTextLimit')
-    const hints: Array<string | null | undefined> = [
-      S.draftTimbreCode.get(),
-      S.draftVoiceName.get(),
-      S.draftVoiceProviderHint.get()
-    ]
-    if (S.draftVoiceModelId.get() > 0) {
-      try {
-        const { userModelList } = await import('~/utils/businessApi')
-        const models = await userModelList({ modelType: 'audio' })
-        const hit = models.find((m) => Number(m.id) === Number(S.draftVoiceModelId.get()))
-        if (hit) hints.push(hit.providerName, hit.modelCode, hit.modelName)
-      } catch {
-        /* ignore */
-      }
-    }
-    const tooLong = checkMiniMaxTtsTextLength(plain, hints)
-    if (tooLong) {
-      message.warning(tooLong)
-      return
-    }
   }
   const vp = ctx.props().storyboardVideoPanels
   const vPanel = vp[i]
@@ -189,7 +173,7 @@ export async function confirmSetLipSync(ctx: DubbingModalCtx) {
   delete pp[i]
   S.pendingPayloadByIndex.set(pp)
   S.confirmedDubbingThisSession.set(new Set([...S.confirmedDubbingThisSession.get(), i]))
-  message.success('已记录本地配音，对口型任务开发中')
+  message.success('已记录本地配音')
 }
 
 export async function applyLipSyncFromPreview(ctx: DubbingModalCtx) {

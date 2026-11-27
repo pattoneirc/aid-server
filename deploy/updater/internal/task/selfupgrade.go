@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -15,7 +16,7 @@ import (
 
 // runSelfUpgrade 升级器自升级：拉清单选平台制品→下载校验→解压→原子自替换。
 // 成功后由主循环退出进程，systemd(Restart=always) 拉起新版本。
-func (r *Runner) runSelfUpgrade(t *Task) error {
+func (r *Runner) runSelfUpgrade(t *Task) (result error) {
 	if strings.TrimSpace(t.ManifestURL) == "" {
 		return fmt.Errorf("任务缺少更新清单地址")
 	}
@@ -35,7 +36,9 @@ func (r *Runner) runSelfUpgrade(t *Task) error {
 
 	archivePath := filepath.Join(r.cfg.WorkDir, fmt.Sprintf("updater-%s.tar.gz", t.TaskID))
 	extractDir := filepath.Join(r.cfg.WorkDir, fmt.Sprintf("updater-extract-%s", t.TaskID))
-	defer r.cleanupWork(archivePath, extractDir)
+	defer func() {
+		result = errors.Join(result, r.cleanupVersionTaskWork(t))
+	}()
 
 	r.reportProgress(t, 25, "下载升级器", "正在下载并校验升级器制品")
 	sources := append([]string{pkg.URL}, pkg.Mirrors...)

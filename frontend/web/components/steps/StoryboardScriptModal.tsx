@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Button, Drawer, Input, Modal, message } from 'antd'
+import { Button, Drawer, Input, Modal, Tag, message } from 'antd'
 import {
   UndoOutlined,
   RedoOutlined,
@@ -14,6 +14,10 @@ import {
 } from '@ant-design/icons'
 import RichTextEditor from '~/components/common/RichTextEditor'
 import ImportScriptModal from './ImportScriptModal'
+import { SelectAssetImageModal } from './SelectAssetImageModal'
+import { importStoryboardReferenceImages } from './edit-storyboard-image/storyboardReferenceImages'
+import type { StoryboardImageReference } from '~/types/business-api'
+import { fetchUserStoryboardDetailOnce } from '~/utils/storyboardDetailOnce'
 import { htmlToPlainText, isHtmlContentEmpty } from '~/utils/htmlPlain'
 import './StoryboardScriptModal.css'
 
@@ -22,7 +26,8 @@ interface Props {
   panelTitle: string
   initialContent?: string
   onOpenChange: (value: boolean) => void
-  onSave?: (payload: { title: string; content: string }) => void
+  storyboardId?: number
+  onSave?: (payload: { title: string; content: string; scriptImageReferences?: StoryboardImageReference[] }) => void | Promise<boolean>
   /** 原 @update:title：保存时（onSave 之前）回传标题，空标题回退「未命名」 */
   onTitleChange?: (title: string) => void
 }
@@ -39,6 +44,7 @@ export function StoryboardScriptModal({
   open,
   panelTitle = '',
   initialContent = '',
+  storyboardId,
   onOpenChange,
   onSave,
   onTitleChange
@@ -48,6 +54,28 @@ export function StoryboardScriptModal({
   const [showHistoryPanel, setShowHistoryPanel] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null)
+  const [scriptReferences, setScriptReferences] = useState<StoryboardImageReference[]>()
+  const [showReferencePicker, setShowReferencePicker] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const referenceScope = useRef<{ projectId: number; episodeId: number } | null>(null)
+
+  useEffect(() => {
+    if (!open || !storyboardId) return
+    let active = true
+    void fetchUserStoryboardDetailOnce(storyboardId).then(
+      (row) => {
+        if (!active) return
+        referenceScope.current = { projectId: Number(row.projectId), episodeId: Number(row.episodeId ?? 0) }
+        setScriptReferences(row.scriptImageReferences ?? [])
+      },
+      () => { if (active) message.warning('参考图加载失败，请重新打开分镜脚本') }
+    )
+    return () => {
+      active = false
+      referenceScope.current = null
+    }
+  }, [open, storyboardId])
 
   const [historyStack, setHistoryStack] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
@@ -190,11 +218,18 @@ export function StoryboardScriptModal({
     setShowImportModal(false)
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const title = localTitle?.trim() || '未命名'
-    onTitleChange?.(title)
-    onSave?.({ title, content: localContentRef.current })
-    onOpenChange(false)
+    setSaving(true)
+    try {
+      const saved = await onSave?.({ title, content: localContentRef.current, scriptImageReferences: scriptReferences })
+      if (saved !== false) {
+        onTitleChange?.(title)
+        onOpenChange(false)
+      }
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleCancel = () => {
@@ -283,6 +318,19 @@ export function StoryboardScriptModal({
                 maxLength={10000}
               />
             </div>
+            {storyboardId && (
+              <div className="toolbar">
+                <Button type="default" loading={importing} disabled={!scriptReferences} onClick={() => setShowReferencePicker(true)}>
+                  添加分镜参考图
+                </Button>
+                {scriptReferences?.map((reference, index) => (
+                  <Tag key={reference.imageId ?? reference.sourceUrl} closable
+                    onClose={() => setScriptReferences((items) => items?.filter((_, position) => position !== index))}>
+                    {reference.name}
+                  </Tag>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 底部操作栏 */}
@@ -290,7 +338,7 @@ export function StoryboardScriptModal({
             <Button onClick={handleCancel}>
               <div className="text-gradient">取消</div>
             </Button>
-            <Button type="primary" onClick={handleSave}>
+            <Button type="primary" loading={saving} disabled={importing} onClick={handleSave}>
               保存
             </Button>
           </div>
@@ -370,6 +418,34 @@ export function StoryboardScriptModal({
         onOpenChange={setShowImportModal}
         onImport={handleImport}
       />
+      {showReferencePicker && (
+        <SelectAssetImageModal
+          open
+          type="reference"
+          onOpenChange={setShowReferencePicker}
+          onConfirm={async (items) => {
+            const scope = referenceScope.current
+            if (!scope?.projectId) return
+            setImporting(true)
+            try {
+              const result = await importStoryboardReferenceImages(scope, items, () => referenceScope.current === scope)
+              if (referenceScope.current !== scope) return
+              setScriptReferences((current) => {
+                const selected = new Map((current ?? []).map(ref => [String(ref.imageId ?? ref.sourceUrl), ref]))
+                for (const image of result.images) {
+                  selected.set(image.id, { index: 0, name: image.promptReferenceName, imageId: image.id, sourceUrl: image.url })
+                }
+                return [...selected.values()].map((reference, index) => ({ ...reference, index: index + 1 }))
+              })
+              if (result.failures.length) message.error(result.failures.join('；'))
+            } catch (cause) {
+              if (referenceScope.current === scope) message.error(cause instanceof Error ? cause.message : '参考图导入失败')
+            } finally {
+              if (referenceScope.current === scope) setImporting(false)
+            }
+          }}
+        />
+      )}
     </Modal>
   )
 }

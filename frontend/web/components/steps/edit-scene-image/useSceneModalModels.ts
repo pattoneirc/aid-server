@@ -35,6 +35,7 @@ export interface SceneModalGenerationSettings {
 export interface SceneModalModelsApi {
   /** 右侧「对话作图」的模型与出图参数（须在 selectedDialogueModel / useModelGenerateSettings 之前声明） */
   dialogueSettings: Mirrored<SceneModalGenerationSettings>
+  resolveDialogueOutputSettings: () => Pick<SceneModalGenerationSettings, 'aspectRatio' | 'quality' | 'count'>
   multiViewSettings: Mirrored<{ model: string }>
   dialogueModelDropdownExpanded: Mirrored<boolean>
   multiViewModelDropdownExpanded: Mirrored<boolean>
@@ -231,6 +232,7 @@ export function useSceneModalModels(ctx: EditSceneImageModalCtx): SceneModalMode
     aspectRatioSelectOptions: dialogueAspectRatioSelectOptions,
     countSelectOptions: dialogueCountSelectOptionsRaw,
     qualitySelectOptions: dialogueQualitySelectOptions,
+    resolveGenerationSettings: resolveDialogueOutputSettings,
     syncSettingsToModel: syncDialogueSettingsToModel
   } = useModelGenerateSettings({
     getSelectedModel: selectedDialogueModel,
@@ -277,6 +279,7 @@ export function useSceneModalModels(ctx: EditSceneImageModalCtx): SceneModalMode
 
   return {
     dialogueSettings,
+    resolveDialogueOutputSettings,
     multiViewSettings,
     dialogueModelDropdownExpanded,
     multiViewModelDropdownExpanded,

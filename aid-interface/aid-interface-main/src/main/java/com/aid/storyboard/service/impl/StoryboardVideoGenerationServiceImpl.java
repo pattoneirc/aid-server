@@ -91,6 +91,7 @@ import com.aid.rps.queue.BatchTaskSlotService;
 import com.aid.rps.queue.BatchParentSubmissionGuard;
 import com.aid.rps.queue.BatchTaskExecutionRejectedException;
 import com.aid.rps.resolver.StoryboardPromptAudioReferenceResolver;
+import com.aid.rps.resolver.StoryboardAudioPlaceholders;
 import com.aid.rps.resolver.StoryboardRoleAudioReferenceResolver;
 import com.aid.rps.service.IRpsFormImageBusinessService.ReferenceEnablePlan;
 import com.aid.rps.service.IAssetExtractService;
@@ -673,11 +674,24 @@ public class StoryboardVideoGenerationServiceImpl implements IStoryboardVideoGen
     }
 
     private String normalizeStoredPromptForModel(String prompt, AidStoryboard storyboard,
-            AiModelConfigVo model, Boolean generateAudio)
+            AiModelConfigVo model, Boolean generateAudio, Long userId)
     {
-        return allowsImplicitRoleAudio(model, generateAudio)
-                ? roleAudioReferenceResolver.normalizeStoredVideoPrompt(prompt, storyboard.getDialogueText())
-                : roleAudioReferenceResolver.alignPromptToResolvedRoleReferences(prompt, storyboard.getDialogueText(), List.of());
+        if (allowsImplicitRoleAudio(model, generateAudio)) {
+            String normalized = roleAudioReferenceResolver.normalizeStoredVideoPrompt(prompt, storyboard.getDialogueText());
+            // A manually selected personal recording can be a reference even if the role has no dialogue.
+            return hasPersonalVoiceReferences(prompt, storyboard, userId) ? prompt : normalized;
+        }
+        // A stored, explicitly bound recording must reach validation before a model can reject it.
+        if (hasPersonalVoiceReferences(prompt, storyboard, userId)) return prompt;
+        return roleAudioReferenceResolver.alignPromptToResolvedRoleReferences(prompt, storyboard.getDialogueText(), List.of());
+    }
+
+    private boolean hasPersonalVoiceReferences(String prompt, AidStoryboard storyboard, Long userId) {
+        if (!StoryboardAudioPlaceholders.contains(prompt)) return false;
+        var resolved = promptAudioReferenceResolver.resolve(prompt, storyboard.getProjectId(),
+                storyboard.getEpisodeId(), userId, List.of(), List.of());
+        return !resolved.getUnavailablePersonalVoices().isEmpty() || resolved.getAudioReferences().stream()
+                .anyMatch(audio -> ReferenceAudioInput.SOURCE_PERSONAL_VOICE.equals(audio.getSourceType()));
     }
 
     private static String multiCapability(StoryboardVideoGenerateRequest request) {
@@ -2159,7 +2173,15 @@ public class StoryboardVideoGenerationServiceImpl implements IStoryboardVideoGen
         StoryboardPromptAudioReferenceResolver.ResolveResult resolved = promptAudioReferenceResolver.resolve(
                 prompt, storyboard.getProjectId(), storyboard.getEpisodeId(), userId,
                 effective.audioRecordIds, effective.referenceAudioIds);
-        // 提示词自身编号矛盾属于内容问题：按首次绑定取值继续，不阻断出片
+        if (!resolved.getUnavailablePersonalVoices().isEmpty()) {
+            throw new ReferenceAudioValidationException("角色录音不可用，请重新选择："
+                    + String.join("、", resolved.getUnavailablePersonalVoices()));
+        }
+        if (resolved.isInvalidAudioIndex() && resolved.getAudioReferences().stream()
+                .anyMatch(audio -> ReferenceAudioInput.SOURCE_PERSONAL_VOICE.equals(audio.getSourceType()))) {
+            throw new ReferenceAudioValidationException("角色录音引用编号冲突，请重新选择");
+        }
+        // 历史平台音色提示词的编号冲突继续沿用首次绑定。
         if (resolved.isInvalidAudioIndex())
         {
             log.warn("分镜参考音频编号冲突已降级: storyboardId={}", storyboard.getId());
@@ -2213,10 +2235,15 @@ public class StoryboardVideoGenerationServiceImpl implements IStoryboardVideoGen
                 ? Collections.emptyList()
                 : referenceAudios.stream()
                 .filter(Objects::nonNull)
-                .filter(audio -> Objects.equals(ReferenceAudioInput.SOURCE_VOICE_SAMPLE, audio.getSourceType()))
+                .filter(audio -> ReferenceAudioInput.SOURCE_VOICE_SAMPLE.equals(audio.getSourceType())
+                        || ReferenceAudioInput.SOURCE_PERSONAL_VOICE.equals(audio.getSourceType()))
                 .map(ReferenceAudioInput::getName)
                 .filter(StrUtil::isNotBlank)
                 .toList();
+        if (referenceAudios != null && referenceAudios.stream()
+                .anyMatch(audio -> ReferenceAudioInput.SOURCE_PERSONAL_VOICE.equals(audio.getSourceType()))) {
+            return roleAudioReferenceResolver.alignPromptToOrderedRoleReferences(prompt, resolvedRoleNames);
+        }
         return roleAudioReferenceResolver.alignPromptToResolvedRoleReferences(
                 prompt, storyboard.getDialogueText(), resolvedRoleNames);
     }
@@ -2279,7 +2306,7 @@ public class StoryboardVideoGenerationServiceImpl implements IStoryboardVideoGen
         String videoPrompt = resolveVideoPrompt(overridePrompt, sb);
         if (StrUtil.isBlank(overridePrompt) || sameEditorPrompt(videoPrompt, sb.getVideoPrompt()))
         {
-            videoPrompt = normalizeStoredPromptForModel(videoPrompt, sb, modelConfig, request.getGenerateAudio());
+            videoPrompt = normalizeStoredPromptForModel(videoPrompt, sb, modelConfig, request.getGenerateAudio(), userId);
         }
         List<ReferenceAudioInput> referenceAudios = resolveAndValidateReferenceAudios(videoPrompt, sb, userId,
                 resolveShotAudioSelection(single, new ExplicitAudioSelection(
@@ -2541,7 +2568,7 @@ public class StoryboardVideoGenerationServiceImpl implements IStoryboardVideoGen
         }
         if (!useFrontPrompt || sameEditorPrompt(videoPrompt, sb.getVideoPromptImage()))
         {
-            videoPrompt = normalizeStoredPromptForModel(videoPrompt, sb, modelConfig, request.getGenerateAudio());
+            videoPrompt = normalizeStoredPromptForModel(videoPrompt, sb, modelConfig, request.getGenerateAudio(), userId);
         }
         List<ReferenceAudioInput> referenceAudios = resolveAndValidateReferenceAudios(videoPrompt, sb, userId,
                 resolveShotAudioSelection(single, new ExplicitAudioSelection(
@@ -2699,7 +2726,7 @@ public class StoryboardVideoGenerationServiceImpl implements IStoryboardVideoGen
         String videoPrompt = resolveVideoPrompt(overridePrompt, sb);
         if (StrUtil.isBlank(overridePrompt) || sameEditorPrompt(videoPrompt, sb.getVideoPrompt()))
         {
-            videoPrompt = normalizeStoredPromptForModel(videoPrompt, sb, modelConfig, request.getGenerateAudio());
+            videoPrompt = normalizeStoredPromptForModel(videoPrompt, sb, modelConfig, request.getGenerateAudio(), userId);
         }
         List<ReferenceAudioInput> referenceAudios = resolveAndValidateReferenceAudios(videoPrompt, sb, userId,
                 er == null ? null : er.audioSelection, modelConfig, request.getGenerateAudio());

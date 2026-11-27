@@ -315,7 +315,7 @@ public final class ModelCapabilityResolver {
     }
 
     /** 是否显式像素尺寸（含宽高分隔符），与档位串（1K / 2K / 1080p）区分。 */
-    private static boolean isExplicitPixelSize(String size) {
+    public static boolean isExplicitPixelSize(String size) {
         return StrUtil.isNotBlank(size) && normalize(size).indexOf('x') >= 0;
     }
 

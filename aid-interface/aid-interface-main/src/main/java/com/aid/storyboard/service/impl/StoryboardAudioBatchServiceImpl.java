@@ -47,10 +47,6 @@ import com.aid.common.exception.ServiceException;
 import com.aid.billing.service.BillingQuoteAssembler;
 import com.aid.billing.vo.BillingQuoteVO;
 import com.aid.common.utils.DateUtils;
-import com.aid.domain.vo.AiModelConfigVo;
-import com.aid.media.constants.MinimaxTtsConstants;
-import com.aid.media.provider.MinimaxProviderDetector;
-import com.aid.service.IAiModelConfigService;
 import com.aid.compose.ComposeConstants;
 import com.aid.compose.domain.ComposeCommand;
 import com.aid.compose.domain.ComposeGroup;
@@ -186,14 +182,6 @@ public class StoryboardAudioBatchServiceImpl implements IStoryboardAudioBatchSer
 
     @Resource
     private IAidAiModelService aidAiModelService;
-
-    /** 模型配置查询：MiniMax 归属判定第一优先级取 providerCode */
-    @Resource
-    private IAiModelConfigService aiModelConfigService;
-
-    /** MiniMax 归属判定器：与单分镜配音门禁、调度层路由共用同一份三级判定 */
-    @Resource
-    private MinimaxProviderDetector minimaxProviderDetector;
 
     @Resource
     private IStoryboardWorkbenchService storyboardWorkbenchService;
@@ -1352,95 +1340,6 @@ public class StoryboardAudioBatchServiceImpl implements IStoryboardAudioBatchSer
             }
         }
         return representativeModelCode;
-    }
-
-    /**
-     * MiniMax 音色单条文本上限前置校验：逐分镜定位所用模型，MiniMax 模型的分镜
-     * 按清洗后台词长度校验（与实际下发 TTS 的文本同口径），超过 500 字符整批拒绝。
-     * 查询字段精简：音色仅 select id/model_id，模型仅 select id/model_code/capability_json。
-     *
-     * @param targets             目标分镜列表
-     * @param voiceByStoryboardId 逐分镜解析出的绑定音色
-     * @param request             批量配音请求（兜底音色/模型来源）
-     */
-    private void validateMinimaxTextLimit(List<AidStoryboard> targets, Map<Long, Long> voiceByStoryboardId,
-                                          StoryboardAudioBatchRequest request) {
-        // 音色 → 模型ID 映射（绑定音色 + 兜底音色）
-        Set<Long> voiceIds = new LinkedHashSet<>(voiceByStoryboardId.values());
-        if (Objects.nonNull(request.getVoiceLibraryId())) {
-            voiceIds.add(request.getVoiceLibraryId());
-        }
-        voiceIds.remove(null);
-        Map<Long, Long> modelIdByVoiceId = new HashMap<>();
-        if (CollectionUtil.isNotEmpty(voiceIds)) {
-            List<AidAiVoiceLibrary> voices = aidAiVoiceLibraryService.list(
-                    Wrappers.<AidAiVoiceLibrary>lambdaQuery()
-                            .select(AidAiVoiceLibrary::getId, AidAiVoiceLibrary::getModelId)
-                            .in(AidAiVoiceLibrary::getId, voiceIds));
-            for (AidAiVoiceLibrary voice : voices) {
-                if (Objects.nonNull(voice.getModelId())) {
-                    modelIdByVoiceId.put(voice.getId(), voice.getModelId());
-                }
-            }
-        }
-        // 收集本批全部模型ID（音色归属模型 + 老入参兜底模型）
-        Set<Long> modelIds = new LinkedHashSet<>(modelIdByVoiceId.values());
-        if (Objects.nonNull(request.getVoiceModelId())) {
-            modelIds.add(request.getVoiceModelId());
-        }
-        if (CollectionUtil.isEmpty(modelIds)) {
-            return;
-        }
-        // 三级判定各模型是否 MiniMax（providerCode → capability_json.provider → supportsModel 兜底）
-        Set<Long> minimaxModelIds = resolveMinimaxModelIds(modelIds);
-        if (CollectionUtil.isEmpty(minimaxModelIds)) {
-            return;
-        }
-        // 逐分镜校验：仅 MiniMax 模型分镜按清洗后台词长度拦截
-        for (AidStoryboard storyboard : targets) {
-            Long modelId = resolveStoryboardModelId(storyboard.getId(), voiceByStoryboardId,
-                    modelIdByVoiceId, request);
-            if (Objects.isNull(modelId) || !minimaxModelIds.contains(modelId)) {
-                continue;
-            }
-            String sanitized = DialogueTextSanitizer.sanitize(storyboard.getDialogueText());
-            if (StrUtil.length(sanitized) > MinimaxTtsConstants.BATCH_TEXT_MAX_LENGTH) {
-                log.info("批量配音 MiniMax 单条文本超限: storyboardId={}, textLen={}, max={}",
-                        storyboard.getId(), StrUtil.length(sanitized), MinimaxTtsConstants.BATCH_TEXT_MAX_LENGTH);
-                throw TaskErrorPresentation.fromCode(TaskErrorCode.USER_INPUT_TOO_LONG, "文本过长，请精简");
-            }
-        }
-    }
-
-    /**
-     * 批量判定 MiniMax 模型集合。
-     * 查询字段精简：仅 select id/model_code/capability_json。
-     *
-     * @param modelIds 模型ID集合
-     * @return 归属 MiniMax 的模型ID集合
-     */
-    private Set<Long> resolveMinimaxModelIds(Set<Long> modelIds) {
-        Set<Long> result = new LinkedHashSet<>();
-        List<AidAiModel> models = aidAiModelService.list(
-                Wrappers.<AidAiModel>lambdaQuery()
-                        .select(AidAiModel::getId, AidAiModel::getModelCode, AidAiModel::getCapabilityJson)
-                        .in(AidAiModel::getId, modelIds));
-        for (AidAiModel model : models) {
-            String providerCode = null;
-            try {
-                AiModelConfigVo config = aiModelConfigService.selectByModelId(model.getId());
-                if (Objects.nonNull(config)) {
-                    providerCode = config.getProviderCode();
-                }
-            } catch (Exception e) {
-                log.warn("批量配音获取 providerCode 失败: modelId={}, err={}", model.getId(), e.getMessage());
-            }
-            String capabilityProvider = MinimaxProviderDetector.parseCapabilityProvider(model.getCapabilityJson());
-            if (minimaxProviderDetector.isMinimax(providerCode, capabilityProvider, model.getModelCode())) {
-                result.add(model.getId());
-            }
-        }
-        return result;
     }
 
     /**

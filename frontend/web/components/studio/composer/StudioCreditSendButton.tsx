@@ -2,7 +2,7 @@
 
 import type { ComponentProps } from 'react'
 import { ComposerSendButton } from '~/components/common/composer-send/ComposerSendButton'
-import { resolveComposerSendVisualState } from '~/utils/composerSendButton'
+import { COMPOSER_SEND_EMPTY_TOOLTIP, resolveComposerSendVisualState } from '~/utils/composerSendButton'
 import { StudioCanvasTooltip } from '@/components/studio/canvas/StudioCanvasTooltip'
 import { useUserStore } from '@/stores/user'
 import { studioCreditPresentation } from '@/utils/studio/studioCreditEstimate'
@@ -40,8 +40,10 @@ export function StudioCreditAmount({
   const presentation = studioCreditPresentation(credits, { isFree, authoritative })
   const label = quoteStatus ? quoteStatus === 'READY' ? presentation.visible : '—'
     : loading ? loadingLabel : error || pendingQuote ? '—' : presentation.visible
+  const amountDescription = loading ? '正在获取积分价格' : error
+    || (quoteStatus && quoteStatus !== 'READY' ? '积分价格暂不可用' : label)
   return (
-    <span className="studio-credit-amount" aria-label={quoteStatus && quoteStatus !== 'READY' ? '积分价格暂不可用' : error || (loading ? '正在获取积分价格' : label)} aria-busy={loading || undefined}>
+    <span className="studio-credit-amount" aria-label={amountDescription} aria-busy={loading || undefined}>
       <StudioCreditMark />
       <b>{label}</b>
     </span>
@@ -77,6 +79,7 @@ export function StudioCreditSendButton({
   quoteStatus,
   disabled,
   className = '',
+  emptyTooltip = COMPOSER_SEND_EMPTY_TOOLTIP,
   ...props
 }: Props) {
   const balance = useUserStore((state) => state.user?.balance)
@@ -93,10 +96,12 @@ export function StudioCreditSendButton({
     generating: props.generating,
     showResume: props.showResume
   })
-  // 发送按钮在空内容、暂停、继续时已经有自己的提示。外层不再叠一层报价提示。
-  const sendOwnsTooltip = visualState === 'empty' || visualState === 'pause' || visualState === 'resume'
+  const sendOwnsTooltip = visualState === 'pause' || visualState === 'resume'
   const quoteUnavailable = Boolean(showCredits && quoteStatus && quoteStatus !== 'READY')
-  const tooltip = sendOwnsTooltip ? '' : disabledReason || (quoteUnavailable ? (quoteStatus === 'ERROR' ? '当前功能暂不可用' : '') : showCredits
+  const quoteUnavailableReason = estimateError.trim()
+    || (quoteStatus === 'ERROR' ? '当前功能暂不可用' : '')
+  const sendDisabled = Boolean(disabled || insufficient || quoteUnavailable)
+  const quoteTooltip = quoteUnavailable ? quoteUnavailableReason : showCredits
     ? insufficient
       ? `\u79ef\u5206\u4e0d\u8db3\uff1a\u5f53\u524d${balance}\uff0c\u672c\u6b21\u62a5\u4ef7${credits}`
       : estimateLoading
@@ -104,11 +109,14 @@ export function StudioCreditSendButton({
         : estimateError
           ? `\u62a5\u4ef7\u6682\u4e0d\u53ef\u7528\uff1a${estimateError}`
           : pendingQuote ? '提交前获取服务端报价' : presentation.ariaLabel
-    : '')
+    : ''
+  const tooltip = sendOwnsTooltip ? '' : disabledReason || (visualState === 'empty' ? emptyTooltip : quoteTooltip)
+  const tooltipNeedsFocus = visualState === 'empty' || (sendDisabled && visualState === 'active')
   const sendButton = (
     <ComposerSendButton
       {...props}
-      disabled={Boolean(disabled || insufficient || (showCredits && quoteStatus && quoteStatus !== 'READY'))}
+      disabled={sendDisabled}
+      emptyTooltip=""
       className={`${className}${insufficient ? ' is-insufficient' : ''}`}
       leadingContent={showCredits ? (
         <StudioCreditAmount credits={credits} isFree={isFree} authoritative={authoritative} loading={estimateLoading}
@@ -119,7 +127,11 @@ export function StudioCreditSendButton({
   )
   return (
     <span className={`studio-credit-send${insufficient ? ' is-insufficient' : ''}`}>
-      {tooltip ? <StudioCanvasTooltip title={tooltip} placement="top"><span>{sendButton}</span></StudioCanvasTooltip> : sendButton}
+      {tooltip ? (
+        <StudioCanvasTooltip title={tooltip} placement="top" trigger={['hover', 'focus']}>
+          <span tabIndex={tooltipNeedsFocus ? 0 : undefined}>{sendButton}</span>
+        </StudioCanvasTooltip>
+      ) : sendButton}
     </span>
   )
 }

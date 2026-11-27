@@ -42,11 +42,6 @@ public final class LegacyModelDefinitionConverter {
             definition.setDefaultCapability(true);
             return new ArrayList<>(List.of(definition));
         }
-        if ("tokendance:minimax:voice_clone".equals(model.getProtocol())) {
-            var definition = build(model, "voice_clone", capability);
-            definition.setDefaultCapability(true);
-            return new ArrayList<>(List.of(definition));
-        }
         String selected = KLING.get(capability.getString("klingScenario") == null ? "" : capability.getString("klingScenario"));
         if (selected == null) selected = VIDEO_SCENARIOS.get(capability.getString("videoScenario") == null ? "" : capability.getString("videoScenario"));
         List<ModelCapabilityDefinition> result = new ArrayList<>();
@@ -108,7 +103,6 @@ public final class LegacyModelDefinitionConverter {
     }
 
     public static String primaryCode(AidAiModel model) {
-        if ("tokendance:minimax:voice_clone".equals(model.getProtocol())) return "voice_clone";
         JSONObject capability = object(model.getCapabilityJson());
         if (capability.getBooleanValue("lipSync")) return "lip_sync";
         String scenario = capability.getString("klingScenario");

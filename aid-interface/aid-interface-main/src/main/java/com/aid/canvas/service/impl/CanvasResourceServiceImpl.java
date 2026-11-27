@@ -108,6 +108,9 @@ public class CanvasResourceServiceImpl implements CanvasResourceService {
         } else if (!blank(request.getSourceCategoryCode())) {
             throw new ServiceException("当前素材来源不接受资产中心分类");
         }
+        if ("AUDIO_ASSET".equals(sourceType)) {
+            source = resolve(sourceType, request.getSourceId(), workspace, userId);
+        }
         CanvasResource existing = canvasMapper.selectCanvasResourceBySource(workspace.getId(), sourceType, request.getSourceId());
         if (existing != null) {
             if (source != null && (!"ACTIVE".equals(existing.getStatus())

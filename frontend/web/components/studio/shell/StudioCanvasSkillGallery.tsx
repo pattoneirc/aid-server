@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeftOutlined, CloseOutlined, SearchOutlined, StarFilled, StarOutlined } from '@ant-design/icons'
 import { StudioSegmentedTabs } from '@/components/studio/composer/StudioSegmentedTabs'
 import { Modal } from 'antd'
@@ -13,10 +13,10 @@ import './studio-canvas-skill-gallery.css'
 
 type View = 'browse' | 'favorites' | 'mine'
 
-function coverStyle(item: CanvasSkillItem): { background: string } {
+function coverHue(item: CanvasSkillItem) {
   let hash = 0
   for (const char of item.code || item.name) hash = (hash * 33 + char.charCodeAt(0)) % 360
-  return { background: `linear-gradient(145deg, hsl(${hash} 42% 42%), hsl(${(hash + 36) % 360} 36% 24%))` }
+  return String(hash)
 }
 
 export function StudioCanvasSkillGallery({
@@ -81,6 +81,22 @@ export function StudioCanvasSkillGallery({
   })
   const detail = detailCode == null ? null : items.find((item) => item.code === detailCode) ?? null
   const detailGroup = detail ? groups.find((group) => group.groupCode === detail.groupCode) : null
+  const gridRef = useRef<HTMLDivElement>(null)
+  const moreRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const sentinel = moreRef.current
+    if (!open || detail || !hasMore || !onLoadMore || !sentinel || loading) return
+    if (typeof IntersectionObserver === 'undefined') {
+      void onLoadMore()
+      return
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) void onLoadMore()
+    }, { root: gridRef.current, rootMargin: '240px 0px' })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [open, detail, hasMore, onLoadMore, loading, cards.length])
 
   const choose = (code: string) => {
     if (!items.some(item => item.code === code && item.available)) return
@@ -128,7 +144,7 @@ export function StudioCanvasSkillGallery({
                     options={[{ value: '', label: '推荐' }, ...categories.map(group => ({ value: group.groupCode, label: group.name }))]} />
                 </div>
             </div> : null}
-            <div className="canvas-skill-gallery__grid" role="list">
+            <div ref={gridRef} className="canvas-skill-gallery__grid" role="list">
               {cards.length ? cards.map((item) => (
                 <article key={item.code} role="listitem" className="canvas-skill-gallery__card">
                   <button type="button" className="canvas-skill-gallery__open" onClick={() => setDetailCode(item.code)}>
@@ -150,8 +166,8 @@ export function StudioCanvasSkillGallery({
                   </div>
                 </article>
               )) : <p className="canvas-skill-gallery__empty">{loading ? '正在加载 Skill…' : query ? '没有找到匹配的 Skill' : '这个分类下还没有 Skill'}</p>}
+              {hasMore ? <p ref={moreRef} className="canvas-skill-gallery__more" role="status">{loading ? '正在加载' : ''}</p> : null}
             </div>
-            {hasMore ? <button type="button" disabled={loading} onClick={() => void onLoadMore?.()}>加载更多</button> : null}
           </>
         )}
       </section>
@@ -161,7 +177,7 @@ export function StudioCanvasSkillGallery({
 
 function SkillCover({ item }: { item: CanvasSkillItem }) {
   return (
-    <span className="canvas-skill-cover" style={item.iconUrl ? undefined : coverStyle(item)}>
+    <span className="canvas-skill-cover" style={item.iconUrl ? undefined : { ['--skill-hue' as string]: coverHue(item) }}>
       {item.iconUrl ? <img src={item.iconUrl} alt="" /> : null}
       <em>{canvasSkillOutputLabel(item.outputKind)}</em>
     </span>

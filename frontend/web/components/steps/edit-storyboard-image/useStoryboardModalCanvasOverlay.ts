@@ -359,14 +359,9 @@ export function useStoryboardModalCanvasOverlay(
 
       clearModalCanvasOverlayLoadingUi(storyboardId, sceneIdx, imageIdx, taskKind)
       ctx.clearStaleStoryboardGenUiForScene(sceneIdx)
-      await ctx.refreshSceneRecords(
-        sceneIdx,
-        result.recordId ?? opts.fallbackRecordId ?? undefined,
-        opts.beforeCount,
-        { force: true }
-      )
+      await ctx.refreshSceneRecordsAfterTask(storyboardId, result, opts.beforeCount, opts.fallbackRecordId)
 
-      if (!opts.silentComplete) {
+      if (!opts.silentComplete && matchesCreationLiveGenScope(taskScope)) {
         message.success(canvasOverlaySuccessMessage(taskKind))
       }
     } finally {

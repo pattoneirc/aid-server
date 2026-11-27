@@ -353,8 +353,9 @@ public class LocalFfmpegVideoProviderClient implements VideoProviderClient
         List<ComposeTrackItem> videoItems = resolveVideoDurations(
                 config, tracks.getVideoItems(), readableInputs);
         double outputDuration = totalDuration(videoItems);
-        VideoSize sourceSize = probeFirstVideoSize(config, videoItems, readableInputs);
-        VideoSize outputSize = resolveOutputSize(plan.getResolution(), sourceSize);
+        VideoSize outputSize = plan.getOutputWidth() != null && plan.getOutputHeight() != null
+                ? new VideoSize(plan.getOutputWidth(), plan.getOutputHeight())
+                : resolveOutputSize(plan.getResolution(), probeFirstVideoSize(config, videoItems, readableInputs));
         Map<String, Boolean> videoAudioStreams = probeVideoAudioStreams(
                 config, videoItems, readableInputs);
         List<ComposeTrackItem> originalAudioItems = buildOriginalAudioItems(

@@ -307,11 +307,8 @@ export function useStoryboardPanelPromptSync(options: PromptSyncOptions) {
   }
 
   /** 在当前文本域光标处插入 @ 资产引用（始终插在光标处，不挪到已有同资产标签） */
-  function insertPromptAssetRefsAtCaret(assets: PromptAssetItem[]): boolean {
-    const editor = getActivePromptEditor()
-    if (!editor || !assets.length) return false
-    editor.insertPromptAssetRefs(assets)
-    return true
+  function insertPromptAssetRefsAtCaret(assets: PromptAssetItem[], focus = true): boolean {
+    return getActivePromptEditor()?.insertPromptAssetRefs(assets, focus) ?? false
   }
 
   function onPromptParamChange(payload: {
@@ -323,11 +320,11 @@ export function useStoryboardPanelPromptSync(options: PromptSyncOptions) {
   }
 
   const multiParamAssetReferenceList = useMemo(() => {
-    if (props.mode !== 'imageToVideo') return []
+    if (props.mode !== 'imageToVideo' && !(props.mode === 'storyboard' && props.onImportReference)) return []
     return [...props.sceneImages, ...props.characterImages, ...props.propImages, ...props.otherImages].filter(
       (img) => img?.url || img?.thumbnail
     )
-  }, [props.mode, props.sceneImages, props.characterImages, props.propImages, props.otherImages])
+  }, [props.mode, props.onImportReference, props.sceneImages, props.characterImages, props.propImages, props.otherImages])
   const multiParamAssetReferenceListRef = useRef(multiParamAssetReferenceList)
   multiParamAssetReferenceListRef.current = multiParamAssetReferenceList
 

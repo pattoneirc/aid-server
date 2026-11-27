@@ -8,11 +8,13 @@ import { useCanvasBillingQuote } from '@/hooks/studio/useCanvasBillingQuote'
 import { useCanvasGenerationQuote } from '@/hooks/studio/useCanvasGenerationQuote'
 import { useCanvasQuoteReferencePreparation } from '@/hooks/studio/useCanvasQuoteReferencePreparation'
 import { CanvasQuoteReferenceNotReadyError } from '@/utils/studio/studioCanvasGenerationQuote'
-import { CanvasGenerationInputError } from '@/utils/studio/canvasGeneration'
+import { canvasModelPromptPolicy } from '@/utils/studio/canvasModelInputValidation'
+import { canvasComposerInputFeedback } from '@/utils/studio/canvasComposerInputFeedback'
 import type { CanvasQuoteState } from '@/hooks/studio/useCanvasQuote'
 import { requestCanvasImageQuote, useCanvasImageQuote } from '@/hooks/studio/useCanvasImageQuote'
 import type { UserImageGenerationRequest } from '@/types/generation-api'
 import { useStudioUiStore } from '@/stores/studioUi'
+import { markStudioQuoteReferences } from '@/stores/studioQuoteReferenceIssues'
 import type { BillingQuoteRequest, BillingQuoteVO, UserModelListItem } from '@/types/business-api'
 import type { StudioCanvasNode, StudioComposerRef } from '@/types/studio'
 import { billingQuoteCreditsForDisplay } from '@/utils/billingQuoteDisplay'
@@ -47,6 +49,7 @@ import {
   type StudioComposerPromptEditorHandle
 } from './StudioComposerPromptEditor'
 import { StudioComposerAttachmentStrip } from './StudioComposerAttachmentStrip'
+import { StudioVideoReferenceErrors, type VideoReferenceIssueGroup } from './StudioVideoReferenceErrors'
 import { StudioCreditSendButton } from './StudioCreditSendButton'
 import { StudioComposerVoiceInput } from './StudioComposerVoiceInput'
 import { useStudioSpeechInput } from '@/hooks/studio/useStudioSpeechInput'
@@ -58,6 +61,8 @@ import { createStudioCameraMarkId, type StudioCameraMarkDraft } from '@/utils/st
 import { useCanvasProjectRuntime } from '@/components/studio/free/CanvasProjectRuntimeContext'
 import { apiErrorMessage } from '@/utils/apiError'
 import { canvasErrorMessage } from '@/utils/canvas/canvasErrorMessage'
+import { canvasResourceMatchesNodeMedia } from '@/utils/canvas/canvasCurrentResultResource'
+import { fullCropRect } from '@/utils/studio/studioImageAiTools'
 import {
   canApplyStudioComposerPromptChange,
   resolveStudioComposerPromptCharacterLimit
@@ -123,6 +128,7 @@ export function StudioComposerFrame({
 }) {
   const canvasRuntime = useCanvasProjectRuntime()
   const presentation = useStudioComposerPresentation()
+  const [rejectedInput, setRejectedInput] = useState<{ node: string; model?: string; capability?: string | null; prompt: string; message: string } | null>(null)
   const [draft, setDraft] = useState(() => ({ nodeId: node.id, source: node.data.prompt, value: node.data.prompt }))
   const [submitting, setSubmitting] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -201,6 +207,20 @@ export function StudioComposerFrame({
   const promptDraft = draft.nodeId === node.id && draft.source === node.data.prompt
     ? draft.value
     : node.data.prompt
+  const selectedCapability = node.data.generationOptions?.videoCapability || pricingModel?.capabilityCode
+  const resolvePromptMaxLength = useCallback(
+    (prompt: string) => resolveStudioComposerPromptCharacterLimit(pricingModel, prompt, selectedCapability),
+    [pricingModel, selectedCapability]
+  )
+  const promptLimit = resolvePromptMaxLength(promptDraft)
+  const promptPolicy = canvasModelPromptPolicy(pricingModel, selectedCapability)
+  const ordinaryMedia = Boolean(canvasRuntime && !resolveCanvasQuoteRequest && !quoteOverride && (node.data.kind === 'image' || node.data.kind === 'video'))
+  const canSendEmpty = allowEmptySubmit || (ordinaryMedia && promptPolicy.optional)
+  const promptError = ordinaryMedia && !promptPolicy.acceptsText && promptDraft.trim()
+    ? '当前模型能力不接受提示词，请清空文字或选择支持文本输入的模型。'
+    : canvasRuntime && promptDraft.length > promptLimit
+    ? `当前模型的提示词最多支持 ${promptLimit.toLocaleString('zh-CN')} 个字符，已输入 ${promptDraft.length.toLocaleString('zh-CN')} 个，请缩短内容。`
+    : ''
   // 引用源节点变化也必须重新报价；只订阅当前引用，避免订阅整个画布节点表。
   const quoteReferenceSignature = useStudioUiStore(state => JSON.stringify(
     [...new Set([...(node.data.composerRefs ?? []).flatMap(ref => ref.nodeId ? [ref.nodeId] : []), ...(node.data.imageDescribe ? [node.data.imageDescribe.sourceNodeId] : [])])]
@@ -214,18 +234,17 @@ export function StudioComposerFrame({
     void quoteReferenceSignature
     if (showCredits === false || !usesGenerationQuote || !canvasRuntime || !ordinaryKind || !pricingModel || pricingLoading
       || ordinaryKind === 'text' && !promptDraft.trim()) return { input: null, error: '', requiresPreparation: false }
+    if (promptError) return { input: null, error: promptError, requiresPreparation: false }
     try {
       return { input: { kind: ordinaryKind, request: canvasRuntime.prepareGenerationQuote(ordinaryKind, node, pricingModel, promptDraft) }, error: '', requiresPreparation: false }
     } catch (error) {
       return {
         input: null,
         error: canvasErrorMessage(error, '当前引用暂不可报价'),
-        requiresPreparation: error instanceof CanvasQuoteReferenceNotReadyError,
-        generationInputError: error instanceof CanvasGenerationInputError
+        requiresPreparation: error instanceof CanvasQuoteReferenceNotReadyError
       }
     }
   })()
-  const generationInputMessage = !task && ordinaryQuote.generationInputError ? ordinaryQuote.error : ''
   const referencePreparation = useCanvasQuoteReferencePreparation(node, canvasRuntime, {
     auto: Boolean(!task && !readOnly && ordinaryQuote.requiresPreparation)
   })
@@ -268,13 +287,11 @@ export function StudioComposerFrame({
     : !serverQuoteExpected && localIsFree
   const credits = authoritativeQuote ? quotedCredits : serverQuoteExpected ? 0 : localCredits
   const setPromptDraft = useCallback((value: string, source = node.data.prompt) => {
+    setRejectedInput(null)
     setDraft({ nodeId: node.id, source, value })
     onPromptDraftChange?.(value)
   }, [node.data.prompt, node.id, onPromptDraftChange])
-  const resolvePromptMaxLength = useCallback(
-    (prompt: string) => resolveStudioComposerPromptCharacterLimit(pricingModel, prompt),
-    [pricingModel]
-  )
+
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -469,11 +486,28 @@ export function StudioComposerFrame({
     return result.prompt
   }, [node, setPromptDraft, showAdvanced, updateNodeData])
 
+  const reportRejectedLength = (length: number, limit: number) => {
+    setRejectedInput({ node: node.id, model: node.data.model, capability: selectedCapability, prompt: promptDraft,
+      message: `本次输入共 ${length.toLocaleString('zh-CN')} 个字符，超过当前模型的 ${limit.toLocaleString('zh-CN')} 字符上限，已保留原文。` })
+  }
+  const rejectedMessage = rejectedInput?.node === node.id && rejectedInput.model === node.data.model
+    && rejectedInput.capability === selectedCapability && rejectedInput.prompt === promptDraft ? rejectedInput.message : ''
+  const generationBlockReason = !task && canvasRuntime ? canvasComposerInputFeedback({
+    ruleError: promptError,
+    referenceError: referencePreparation.error,
+    quoteError: activeQuote.error || ordinaryQuote.error,
+    disabledReason: submitDisabledReason || (!onSubmit ? '当前节点尚未接入真实提交接口，请使用节点工具完成操作' : ''),
+    idleReason: quoteInputReason,
+    missingPrompt: !promptDraft.trim() && !canSendEmpty,
+    unmatched: activeQuote.quote?.matched === false,
+    loading: Boolean(pricingLoading || activeQuote.loading || referencePreparation.busy)
+  }) : ''
+
   const submit = async () => {
     if (voice.active) return
     const latest = promptEditorRef.current?.getPrompt() ?? promptDraft
     const raw = latest.trim()
-    if ((!raw && !allowEmptySubmit) || submittingRef.current) return
+    if ((!raw && !canSendEmpty) || submittingRef.current) return
     if (!onSubmit || submitDisabledReason || referencePreparationBlocked) return
     if (serverQuoteExpected && !authoritativeQuote) {
       activeCanvasQuote.refresh?.()
@@ -492,7 +526,7 @@ export function StudioComposerFrame({
       commitPrompt(latest)
       const linked = resolveCanvasQuoteRequest ? latest : runAutoLink(latest)
       const submittedPrompt = canvasRuntime ? linked : linked.trim()
-      if (!submittedPrompt.trim() && !allowEmptySubmit) return
+      if (!submittedPrompt.trim() && !canSendEmpty) return
       if (usesGenerationQuote && canvasRuntime && ordinaryKind && pricingModel) {
         const current = useStudioUiStore.getState().nodes.find(item => item.id === node.id)
         if (!current) throw new Error('节点已变化，请重新选择')
@@ -595,6 +629,89 @@ export function StudioComposerFrame({
     || (activeQuote.quote?.matched === false ? '当前参数没有可用计费规则' : '')
   const quoteFeedbackStatus = serverQuoteExpected ? pricingLoading ? 'LOADING' : activeCanvasQuote.status : undefined
   const quoteFeedbackLoading = Boolean(serverQuoteExpected && (pricingLoading || activeQuote.loading))
+  const imageIssues = ordinaryCanvasQuote.referenceIssues
+  const quoteReferenceIds = ordinaryQuote.input?.request.references?.map(ref => ref.resourceId).join(',') ?? ''
+  const groups = useMemo(() => {
+    const result = new Map<string, VideoReferenceIssueGroup>()
+    if (!usesGenerationQuote || pricingLoading || !imageIssues?.length) return result
+    const allowed = new Set(quoteReferenceIds.split(','))
+    for (const issue of imageIssues) {
+      if (!allowed.has(issue.resourceId)) continue
+      const existing = result.get(issue.resourceId)
+      if (existing) existing.issues.push(issue)
+      else result.set(issue.resourceId, { resourceId: issue.resourceId, index: issue.index, issues: [issue] })
+    }
+    return result
+  }, [imageIssues, quoteReferenceIds, pricingLoading, usesGenerationQuote])
+
+  const referenceIndex = useMemo(() => {
+    const ids = [...new Set(quoteReferenceIds.split(','))].filter(id => canvasRuntime?.resourceById(id)?.mediaType === 'IMAGE')
+    return new Map(ids.map((id, index) => [id, index + 1]))
+  }, [canvasRuntime, quoteReferenceIds])
+
+  const issueForRef = useCallback((ref: Pick<StudioComposerRef, 'nodeId' | 'assetId' | 'kind' | 'mediaKind' | 'previewUrl'>) => {
+    if (!groups.size || ref.mediaKind !== 'image') return undefined
+    const get = (id: string) => {
+      const index = groups.get(id)?.index ?? referenceIndex.get(id)
+      return index ? { resourceId: id, index, invalid: groups.has(id) } : undefined
+    }
+    if (ref.kind !== 'asset' && ref.kind !== 'library' && ref.assetId) {
+      const direct = get(String(ref.assetId))
+      if (direct) return direct
+    }
+    const source = useStudioUiStore.getState().nodes.find(item => item.id === ref.nodeId)
+    if (!source) return undefined
+    const ids = [source.data.canvasPrimaryResourceId, ...(source.data.canvasResourceIds ?? [])]
+    for (const id of ids) {
+      if (!id) continue
+      if (canvasResourceMatchesNodeMedia(canvasRuntime?.resourceById(id), source.data)) {
+        const match = get(id)
+        if (match) return match
+      }
+    }
+    return undefined
+  }, [canvasRuntime, groups, referenceIndex])
+
+  const linkedIssueCount = useMemo(() => {
+    if (!groups.size) return 0
+    const { nodes, edges } = useStudioUiStore.getState()
+    return new Set(listStudioComposerUpstreamThumbs(node.id, nodes, edges)
+      .map(item => issueForRef({ ...item, kind: 'node', mediaKind: item.mediaKind ?? 'image' }))
+      .map(item => item?.invalid ? item.resourceId : undefined)
+      .filter(Boolean)).size
+  }, [groups.size, issueForRef, node.id, upstreamSignature])
+  useEffect(() => {
+    if (linkedIssueCount) return markStudioQuoteReferences(node.id, linkedIssueCount)
+  }, [linkedIssueCount, node.id])
+
+  const locateReference = (id: string) => {
+    const thumb = frameRef.current?.querySelector<HTMLButtonElement>(
+      `[data-invalid-reference="${id}"] .studio-composer-thumbs__hit`
+    )
+    thumb?.focus()
+    thumb?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+
+  const referenceIssueAction = (group: VideoReferenceIssueGroup) => {
+    if (readOnly || !canvasRuntime?.canMutate) return null
+    const state = useStudioUiStore.getState()
+    const ref = node.data.composerRefs?.find(item => issueForRef(item)?.resourceId === group.resourceId)
+    if (ref && !ref.nodeId && ref.kind === 'upload') return <StudioComposerUploadButton node={node} replaceRef={ref} />
+    const sources = state.edges.filter(edge => edge.target === node.id).map(edge => edge.source)
+    const source = state.nodes.find(item => (item.id === ref?.nodeId || sources.includes(item.id))
+      && issueForRef({ kind: 'node', nodeId: item.id, mediaKind: 'image' })?.resourceId === group.resourceId)
+    if (!source) return null
+    const crop = group.issues.some(issue => issue.kind === 'ASPECT_RATIO')
+    return <button type="button" onClick={() => {
+      state.selectNodes([source.id])
+      if (crop) state.openImageEditSession({
+        mode: 'crop', nodeId: source.id, aspectRatio: 'original', rect: fullCropRect()
+      })
+      window.requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('studio:focus-node', {
+        detail: { nodeId: source.id }
+      })))
+    }}>{crop ? '裁剪原图' : '定位原图'}</button>
+  }
 
   return (
     <StudioCameraLibraryProvider value={cameraLibraryController}>
@@ -647,6 +764,7 @@ export function StudioComposerFrame({
           refs={node.data.composerRefs}
           onInsert={insertInlineMention}
           onRemove={removeReference}
+          issueForRef={issueForRef}
         />
         {!readOnly ? (
           <div className={`studio-composer__prompt-wrap${promptLeading ? ' has-leading' : ''}${expanded ? ' is-expanded' : ''}`}>
@@ -686,6 +804,7 @@ export function StudioComposerFrame({
                   optionKey: mark.optionKey
                 }) : undefined}
                 onSubmit={() => void submit()}
+                onRejectedLength={reportRejectedLength}
                 resolveMaxLength={canvasRuntime ? resolvePromptMaxLength : undefined}
               />
             ) : (
@@ -700,7 +819,10 @@ export function StudioComposerFrame({
                     promptDraft,
                     nextPrompt,
                     resolvePromptMaxLength
-                  )) return
+                  )) {
+                    reportRejectedLength(nextPrompt.length, resolvePromptMaxLength(nextPrompt))
+                    return
+                  }
                   setPromptDraft(nextPrompt)
                 }}
                 onBlur={() => { if (!voice.active) commitPrompt() }}
@@ -737,7 +859,9 @@ export function StudioComposerFrame({
           </div>
         ) : null}
       </div>
-      {generationInputMessage && <p className="studio-composer__input-error" role="alert">{generationInputMessage}</p>}
+      {groups.size > 0 ? (
+        <StudioVideoReferenceErrors groups={[...groups.values()]} onLocate={locateReference} renderAction={referenceIssueAction} />
+      ) : null}
       <div className="studio-composer__footer">
         <div className="studio-composer__tools">{attachmentControl === undefined ? <StudioComposerUploadButton node={node} /> : attachmentControl}{bottomLeft}</div>
         <div className="studio-composer__actions">
@@ -775,7 +899,7 @@ export function StudioComposerFrame({
                 credits={credits}
                 isFree={isFree}
                 showCredits={creditsVisible}
-                hasContent={Boolean(promptDraft.trim()) || allowEmptySubmit}
+                hasContent={Boolean(promptDraft.trim()) || canSendEmpty}
                 mode="agent"
                 loading={Boolean(task || submitting)}
                 className="studio-composer__send"
@@ -787,8 +911,8 @@ export function StudioComposerFrame({
                 estimateError={quoteFeedbackError}
                 quoteStatus={quoteFeedbackStatus}
 
-                disabled={Boolean(submitDisabledReason || !onSubmit || referencePreparationBlocked || (serverQuoteExpected && !authoritativeQuote))}
-                disabledReason={submitDisabledReason || generationInputMessage || (!onSubmit ? '当前节点尚未接入真实提交接口，请使用节点工具完成操作' : '')}
+                disabled={Boolean(promptError || submitDisabledReason || !onSubmit || referencePreparationBlocked || (serverQuoteExpected && !authoritativeQuote))}
+                disabledReason={rejectedMessage || generationBlockReason || submitDisabledReason || (!onSubmit ? '当前节点尚未接入真实提交接口，请使用节点工具完成操作' : '')}
               />
             ) : null}
           />

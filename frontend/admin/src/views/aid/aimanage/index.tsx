@@ -12,7 +12,6 @@ import {
   retireModel,
   type OrchestrationImpact
 } from '@/api/aid/orchestration';
-import { cleanExpiredVoices } from '@/api/aid/voicelibrary';
 import ProviderPanel from './ProviderPanel';
 import ModelTable from './ModelTable';
 import { compareProviders } from './providerCategory';
@@ -21,7 +20,6 @@ import TokenDanceAccountModal from './TokenDanceAccountModal';
 import TokenDanceCatalogModal from './TokenDanceCatalogModal';
 import ProviderDialog from './ProviderDialog';
 import ModelDialog from './ModelDialog';
-import SyncVoiceModal from './SyncVoiceModal';
 import RealModelOverviewDrawer from './RealModelOverviewDrawer';
 import ModelPoolBindingModal, { type ModelPoolBindingMode } from './ModelPoolBindingModal';
 import RetirementModal from '@/views/aid/orchestration/RetirementModal';
@@ -32,12 +30,10 @@ import './style.less';
 const EMPTY_POOL_SNAPSHOT: ModelPoolBindingSnapshot = { pools: [], models: [] };
 
 /**
- * AI 管理主页：服务商 + 模型列表 + MiniMax 音色同步入口
+ * AI 管理主页：服务商与模型列表
  *
  * v2.39.x 要点：
- * - SyncVoiceModal 作为独立模块级组件导入，父组件 re-render 不会把它重挂
  *   （旧版本把穿梭面板定义在函数体内，每次勾选音色都导致面板里搜索框/滚动位置被重置）
- * - 同步音色 / 清除过期 按钮只在 providerCode==='minimax' 时暴露，和后端 isMinimax 判定一致
  */
 export default function AimanagePage() {
   const [providerList, setProviderList] = useState<Provider[]>([]);
@@ -317,37 +313,6 @@ export default function AimanagePage() {
   // ==================== 真实模型总览 ====================
   const [overviewOpen, setOverviewOpen] = useState(false);
 
-  // ==================== v2.39.x：MiniMax 音色同步 ====================
-  const [syncModalOpen, setSyncModalOpen] = useState(false);
-
-  // 给弹窗的 audio 模型列表（排除已停用）
-  const syncAudioModels = useMemo(
-    () => modelList.filter((m) => m.modelType === 'audio' && m.status !== '1'),
-    [modelList]
-  );
-
-  const handleOpenSync = () => {
-    if (syncAudioModels.length === 0) {
-      message.warning('请先在当前服务商下新增 audio 类型模型');
-      return;
-    }
-    setSyncModalOpen(true);
-  };
-
-  const handleCleanExpired = () => {
-    Modal.confirm({
-      title: '清除过期音色',
-      content: '将把所有下架时间已过期（offline_time ≤ 当前时间）的音色软删除。此操作不可撤销，确认继续？',
-      okType: 'danger',
-      okText: '确认清除',
-      onOk: async () => {
-        const res: any = await cleanExpiredVoices();
-        const count = res?.data || 0;
-        message.success(`已清除 ${count} 条过期音色`);
-      }
-    });
-  };
-
   return (
     <>
       <TokenDanceAccountModal open={tokenDanceAction === 'account'} provider={tokenDanceProvider} onClose={() => setTokenDanceAction(null)} />
@@ -376,8 +341,6 @@ export default function AimanagePage() {
         onEdit={handleEditModel}
         onDelete={handleDeleteModel}
         onToggleStatus={handleToggleModelStatus}
-        onSyncVoice={handleOpenSync}
-        onCleanExpired={handleCleanExpired}
         onOpenOverview={() => setOverviewOpen(true)}
         poolSnapshot={poolSnapshot}
         poolSnapshotReady={poolSnapshotReady}
@@ -433,11 +396,6 @@ export default function AimanagePage() {
         page={referenceState.page} pageSize={referenceState.pageSize}
         onPage={loadReferencePage}
         onClose={() => setReferenceState({ open: false, page: 1, pageSize: 20, loading: false })} />
-      <SyncVoiceModal
-        open={syncModalOpen}
-        audioModels={syncAudioModels}
-        onClose={() => setSyncModalOpen(false)}
-      />
       <RealModelOverviewDrawer
         open={overviewOpen}
         onClose={() => setOverviewOpen(false)}

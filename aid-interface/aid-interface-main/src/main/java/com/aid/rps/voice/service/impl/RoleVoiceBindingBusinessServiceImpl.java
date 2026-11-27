@@ -21,6 +21,8 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.aid.aid.domain.AidAiModel;
 import com.aid.aid.domain.AidAiProvider;
 import com.aid.aid.domain.AidAiVoiceLibrary;
+import com.aid.aid.domain.AidAudioAsset;
+import com.aid.asset.audio.service.impl.PersonalVoiceAssetService;
 import com.aid.aid.domain.AidReferenceAudio;
 import com.aid.aid.domain.AidRolePropScene;
 import com.aid.aid.domain.AidRoleVoiceBinding;
@@ -93,6 +95,9 @@ public class RoleVoiceBindingBusinessServiceImpl implements IRoleVoiceBindingBus
     @Resource
     private IAidReferenceAudioService referenceAudioService;
 
+    @Resource
+    private PersonalVoiceAssetService personalVoiceAssets;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public RoleVoiceBindingVO bindVoice(RoleVoiceBindRequest request, Long userId)
@@ -104,6 +109,12 @@ public class RoleVoiceBindingBusinessServiceImpl implements IRoleVoiceBindingBus
         }
         AidRolePropScene asset = loadOwnedCharacter(request.getAssetId(), userId);
 
+        boolean personal = request.getPersonalAudioAssetId() != null;
+        if (personal == (request.getVoiceLibraryId() != null)
+                || (personal && request.getReferenceAudioId() != null)) {
+            throw new RuntimeException("请选择一种音色");
+        }
+        if (personal) return bindPersonalVoice(asset, request.getPersonalAudioAssetId(), userId);
         AidAiVoiceLibrary voice = loadActiveVoiceLibrary(request.getVoiceLibraryId());
 
         validateOverrideSpeed(request.getOverrideSpeed());
@@ -239,6 +250,10 @@ public class RoleVoiceBindingBusinessServiceImpl implements IRoleVoiceBindingBus
         {
             return null;
         }
+        if (binding.getPersonalAudioAssetId() != null) {
+            Long id = binding.getPersonalAudioAssetId();
+            return toPersonalVO(binding, personalVoiceAssets.findOwned(List.of(id), userId).get(id));
+        }
         // 实时读音色库，拿到最新能力 + offline_time + 展示字段
         AidAiVoiceLibrary voice = voiceLibraryService.getById(binding.getVoiceLibraryId());
         // 可用性判定：音色启用未删 且 所属模型/供应商均启用
@@ -258,6 +273,7 @@ public class RoleVoiceBindingBusinessServiceImpl implements IRoleVoiceBindingBus
         LambdaQueryWrapper<AidRoleVoiceBinding> wrapper = Wrappers.lambdaQuery();
         wrapper.select(AidRoleVoiceBinding::getId, AidRoleVoiceBinding::getAssetId,
                 AidRoleVoiceBinding::getUserId, AidRoleVoiceBinding::getVoiceLibraryId,
+                AidRoleVoiceBinding::getPersonalAudioAssetId,
                 AidRoleVoiceBinding::getVoiceCode, AidRoleVoiceBinding::getVoiceName,
                 AidRoleVoiceBinding::getAvatarUrl, AidRoleVoiceBinding::getSampleUrl,
                 AidRoleVoiceBinding::getSampleText, AidRoleVoiceBinding::getLanguage,
@@ -279,6 +295,7 @@ public class RoleVoiceBindingBusinessServiceImpl implements IRoleVoiceBindingBus
 
         // 批查音色库：一次拿到所有涉及音色的能力字段 + offline_time + 状态 + 实时展示字段（头像/试听）
         Set<Long> voiceIds = bindings.stream()
+                .filter(binding -> binding.getPersonalAudioAssetId() == null)
                 .map(AidRoleVoiceBinding::getVoiceLibraryId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
@@ -305,9 +322,15 @@ public class RoleVoiceBindingBusinessServiceImpl implements IRoleVoiceBindingBus
         // 批量可用性判定（音色启用未删 且 模型/供应商启用）
         Map<Long, Boolean> usableMap = resolveVoiceUsableMap(voiceMap.values());
 
+        Map<Long, AidAudioAsset> recordings = personalVoiceAssets.findOwned(bindings.stream()
+                .map(AidRoleVoiceBinding::getPersonalAudioAssetId).filter(Objects::nonNull).distinct().toList(), userId);
         Map<Long, RoleVoiceBindingVO> result = new HashMap<>(bindings.size());
         for (AidRoleVoiceBinding b : bindings)
         {
+            if (b.getPersonalAudioAssetId() != null) {
+                result.put(b.getAssetId(), toPersonalVO(b, recordings.get(b.getPersonalAudioAssetId())));
+                continue;
+            }
             AidAiVoiceLibrary voice = voiceMap.get(b.getVoiceLibraryId());
             boolean usable = Objects.nonNull(voice)
                     && Boolean.TRUE.equals(usableMap.get(voice.getId()));
@@ -572,12 +595,11 @@ public class RoleVoiceBindingBusinessServiceImpl implements IRoleVoiceBindingBus
     {
         boolean sampleChanged = !Objects.equals(previousSampleUrl, entity.getSampleUrl());
         boolean referenceCleared = Objects.isNull(entity.getReferenceAudioId());
-        if (!sampleChanged && !referenceCleared)
-        {
-            return bindingService.updateById(entity);
-        }
+        entity.setPersonalAudioAssetId(null);
         LambdaUpdateWrapper<AidRoleVoiceBinding> wrapper = Wrappers.<AidRoleVoiceBinding>lambdaUpdate()
-                .eq(AidRoleVoiceBinding::getId, entity.getId());
+                .eq(AidRoleVoiceBinding::getId, entity.getId())
+                .eq(AidRoleVoiceBinding::getDelFlag, DEL_FLAG_NORMAL)
+                .set(AidRoleVoiceBinding::getPersonalAudioAssetId, null);
         if (sampleChanged)
         {
             wrapper.set(AidRoleVoiceBinding::getSampleDurationMs, null);
@@ -682,6 +704,53 @@ public class RoleVoiceBindingBusinessServiceImpl implements IRoleVoiceBindingBus
             vo.setOffline(Boolean.TRUE);
         }
         return vo;
+    }
+
+    private RoleVoiceBindingVO bindPersonalVoice(AidRolePropScene role, Long audioId, Long userId) {
+        AidAudioAsset recording = personalVoiceAssets.requireOwned(audioId, userId);
+        Date now = DateUtils.getNowDate();
+        String operator = userId.toString();
+        AidRoleVoiceBinding current = findActiveBinding(role.getId());
+        if (current == null) {
+            current = new AidRoleVoiceBinding();
+            current.setAssetId(role.getId());
+            current.setProjectId(role.getProjectId());
+            current.setEpisodeId(role.getEpisodeId());
+            current.setUserId(userId);
+            current.setPersonalAudioAssetId(audioId);
+            current.setStatus(STATUS_NORMAL);
+            current.setDelFlag(DEL_FLAG_NORMAL);
+            current.setCreateBy(operator);
+            current.setCreateTime(now);
+            if (!bindingService.save(current)) throw new RuntimeException("绑定失败");
+        } else {
+            // 保留既有 TTS 设置，音画同步仍按原口径读取。角色展示和视频引用以个人录音为准。
+            boolean saved = bindingService.update(Wrappers.<AidRoleVoiceBinding>lambdaUpdate()
+                    .eq(AidRoleVoiceBinding::getId, current.getId())
+                    .eq(AidRoleVoiceBinding::getUserId, userId)
+                    .eq(AidRoleVoiceBinding::getDelFlag, DEL_FLAG_NORMAL)
+                    .set(AidRoleVoiceBinding::getPersonalAudioAssetId, audioId)
+                    .set(AidRoleVoiceBinding::getStatus, STATUS_NORMAL)
+                    .set(AidRoleVoiceBinding::getUpdateBy, operator)
+                    .set(AidRoleVoiceBinding::getUpdateTime, now));
+            if (!saved) throw new RuntimeException("绑定失败");
+            current.setPersonalAudioAssetId(audioId);
+        }
+        return toPersonalVO(current, recording);
+    }
+
+    private RoleVoiceBindingVO toPersonalVO(AidRoleVoiceBinding binding, AidAudioAsset recording) {
+        RoleVoiceBindingVO result = new RoleVoiceBindingVO();
+        result.setBindingId(binding.getId());
+        result.setAssetId(binding.getAssetId());
+        result.setPersonalAudioAssetId(binding.getPersonalAudioAssetId());
+        result.setOffline(recording == null);
+        if (recording != null) {
+            result.setVoiceName(recording.getAssetTitle());
+            result.setAvatarUrl(recording.getAvatarUrl());
+            result.setSampleUrl(recording.getAudioUrl());
+        }
+        return result;
     }
 
     /** 实时值非空优先，否则回退快照值。 */

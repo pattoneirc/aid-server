@@ -162,7 +162,7 @@ export function EditSceneImageModal(props: EditSceneImageModalProps) {
     const referenceImages = c.dialogueSourceImages.value
       .map((image) => String(image.url || '').trim())
       .filter(Boolean)
-    const settings = c.dialogueSettings.value
+    const settings = c.resolveDialogueOutputSettings()
     const aspectRatio = String(settings.aspectRatio || '').trim() || '1:1'
     const size = String(settings.quality || '').trim().toUpperCase() || '2K'
     const imageCount = Math.max(1, Math.min(4, Number(settings.count) || 1))
@@ -784,6 +784,7 @@ export function EditSceneImageModal(props: EditSceneImageModalProps) {
                         quote={generationQuote.quote}
                         loading={generationQuote.loading}
                         error={generationQuote.error}
+                        showQuoteError
                         idleText={quoteIdleText}
                       />
                       <Button

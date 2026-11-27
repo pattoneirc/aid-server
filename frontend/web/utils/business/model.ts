@@ -3,6 +3,7 @@ import { request } from '~/utils/api'
 import { canvasApiPost } from '~/utils/canvas/canvasApiClient'
 import { CANVAS_QUOTE_TIMEOUT_MS, canvasQuoteIdentity } from '@/utils/canvas/canvasQuote'
 import { normalizeListByFuncGroups } from '~/utils/modelListByFuncBatch'
+import { modelSupportsCapability } from '~/utils/modelCapability'
 import {
   unwrap,
   stableRequestKey,
@@ -56,6 +57,23 @@ export async function userModelList(body: UserModelListRequest = {}): Promise<Us
 
 /** 自由画布模型必须与画布服务的能力配置同源，不能混用主站模型目录。 */
 export async function canvasUserModelList(body: UserModelListRequest = {}, force = false): Promise<UserModelListItem[]> {
+  const poolCodes = canvasCatalogPools(body)
+  if (poolCodes.length > 0) {
+    const groups = await canvasUserModelListByFuncCodes(poolCodes, undefined, force)
+    const seen = new Set<string>()
+    const videoCapability = body.modelType === 'video' ? body.generateMode?.trim().toLowerCase().replaceAll('-', '_') : undefined
+    return groups.flatMap(({ models, defaultModelCode }) => {
+      const ordered = [...(models ?? [])]
+      const index = ordered.findIndex(model => model.modelCode === defaultModelCode)
+      if (index > 0) ordered.unshift(...ordered.splice(index, 1))
+      return ordered.filter(model => {
+        if (videoCapability && !modelSupportsCapability(model, videoCapability)) return false
+        if (seen.has(model.modelCode)) return false
+        seen.add(model.modelCode)
+        return true
+      })
+    })
+  }
   const identity = canvasQuoteIdentity()
   const key = `${identity}:${modelRequestKey(body)}`
   return runListDedupe(key, modelListInflight, modelListBurst, async () => {
@@ -64,6 +82,17 @@ export async function canvasUserModelList(body: UserModelListRequest = {}, force
     const data = unwrap(response)
     return Array.isArray(data) ? data : []
   }, force ? 0 : MODEL_CATALOG_BURST_MS)
+}
+
+function canvasCatalogPools({ modelType, generateMode }: UserModelListRequest): string[] {
+  const mode = generateMode?.trim().toLowerCase().replaceAll('-', '_')
+  if (modelType === 'text' && (!mode || mode === 'text')) return ['canvas.text.generate']
+  if (modelType === 'video') return ['canvas.video.generate']
+  if (modelType !== 'image') return []
+  if (!mode) return ['canvas.image.text_to_image', 'canvas.image.image_to_image']
+  if (mode === 'text_to_image' || mode === 'image_to_image') return [`canvas.image.${mode}`]
+  if (mode === 'image_upscale') return ['canvas.image.upscale']
+  return []
 }
 
 /** 按多个功能编码批量查询模型列表：POST /api/user/model/listByFunc */
@@ -93,7 +122,7 @@ export async function userModelListByFuncCodes(
 }
 
 /** Canvas gateway business pool; project IDs remain strings to preserve Long precision. */
-export async function canvasUserModelListByFuncCodes(funcCodes: readonly string[], projectId?: string): Promise<UserModelListByFuncGroupVO[]> {
+export async function canvasUserModelListByFuncCodes(funcCodes: readonly string[], projectId?: string, force = false): Promise<UserModelListByFuncGroupVO[]> {
   const codes = [...new Set(funcCodes.map((code) => code.trim()).filter(Boolean))]
   if (!codes.length) return []
   const body = { funcCodes: codes, ...(projectId ? { projectId } : {}) }
@@ -103,7 +132,7 @@ export async function canvasUserModelListByFuncCodes(funcCodes: readonly string[
     const response = await canvasApiPost<UserModelListByFuncGroupVO[] | UserModelListItem[]>('/api/user/model/listByFunc', body, { requestTimeoutMs: CANVAS_QUOTE_TIMEOUT_MS })
     if (canvasQuoteIdentity() !== identity) throw new Error('画布账号或连接已变化，请重新读取模型')
     return normalizeListByFuncGroups(unwrap(response), codes)
-  }, MODEL_CATALOG_BURST_MS)
+  }, force ? 0 : MODEL_CATALOG_BURST_MS)
 }
 
 /** 按功能编码查询可用模型列表：POST /api/user/model/listByFunc（v2.34.0） */

@@ -21,6 +21,9 @@ public class StoryboardSaveRequest {
     /** 分镜剧本内容(对该镜头的剧情描述) */
     private String storyScript;
 
+    /** 当前分镜脚本明确选中的图片。 */
+    private java.util.List<StoryboardImageReference> scriptImageReferences;
+
     /** 分镜台词配音文本(该镜头角色的对话) */
     private String dialogueText;
 

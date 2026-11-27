@@ -2,9 +2,12 @@ package com.aid.media.provider.impl;
 
 
 import cn.hutool.http.HttpRequest;
+import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONUtil;
 import cn.hutool.json.JSONObject;
+import com.aid.common.error.ErrorNormalizer;
+import com.aid.common.error.TaskErrorSnapshot;
 import com.aid.common.exception.ServiceException;
 import com.aid.common.constant.HttpConstants;
 import com.aid.common.utils.ProviderEndpointUtils;
@@ -27,13 +30,17 @@ import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerati
 import com.volcengine.ark.runtime.model.content.generation.GetContentGenerationTaskResponse;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
 
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -69,6 +76,13 @@ public class VolcengineVideoProviderClient implements VideoProviderClient {
     private static final String OPTION_DRAFT = "draft";
     private static final String OPTION_DRAFT_TASK_ID = "draft_task_id";
     private static final String OPTION_TOOLS = "tools";
+    private static final Set<String> STRICT_ARK_OPTION_KEYS = Set.of(
+            "lastFrameImageUrl", "endImageUrl", "end_image_url", "referenceImages", "images",
+            "featureVideoUrl", "referenceVideoUrl", "baseVideoUrl", "inputVideoUrl", "videoUrl", "video_url",
+            "referenceVideos", "videos", "referenceVideoDurations", "videoDurations", "inputVideoDurations",
+            "inputVideoSeconds", "referenceVideoSeconds", "videoSeconds", "resolution", "size", "ratio",
+            "aspect_ratio", "generate_audio", "audio", "seed", "enhance_prompt", "omni_reference_task_type",
+            "generateMode", "start_end", "videoScenario", "operation");
     private static final Set<String> REQUEST_OPTION_KEYS = Set.of(
             "lastFrameImageUrl", "endImageUrl", "end_image_url",
             "referenceImages", "images",
@@ -110,22 +124,55 @@ public class VolcengineVideoProviderClient implements VideoProviderClient {
 
     @Override
     public ProviderSubmitResult submit(AiModelConfigVo modelConfig, MediaVideoGenerateRequest request) {
+        boolean strictArk = usesStrictArkContract(modelConfig);
+        if (strictArk) {
+            // 内容构造会归一化提示词，任务快照仍使用入参。
+            MediaVideoGenerateRequest outbound = new MediaVideoGenerateRequest();
+            BeanUtil.copyProperties(request, outbound);
+            request = outbound;
+        }
         String effectiveModel = resolveEffectiveModel(modelConfig, request);
         List<CreateContentGenerationTaskRequest.Content> contents = buildContents(request, modelConfig);
-        CreateContentGenerationTaskRequest createRequest = buildCreateRequest(effectiveModel, contents, request, modelConfig);
+        Object createRequest = strictArk ? buildStrictArkRequest(effectiveModel, contents, request, modelConfig, false)
+                : buildCreateRequest(effectiveModel, contents, request, modelConfig);
 
         log.info("Volcengine 视频生成提交(Seedance), model={}, promptLen={}", effectiveModel,
                 StringUtils.length(request.getPrompt()));
 
+        String arkBody = null;
+        if (strictArk) {
+            try {
+                arkBody = strictArkWireBody(OBJECT_MAPPER.writeValueAsString(createRequest), request);
+            } catch (Exception ex) {
+                return com.aid.media.provider.ProviderSubmissionFailures.localPreparationFailure(ex);
+            }
+        }
         CreateContentGenerationTaskResult result;
         try {
+            String body = strictArk ? arkBody : com.aid.model.definition.ModelConfiguredRequestBody.applyJson(
+                    modelConfig, OBJECT_MAPPER.writeValueAsString(createRequest), request);
             HttpResult response = doPost(buildSubmitUrl(modelConfig), modelConfig.getApiKey(),
-                    com.aid.model.definition.ModelConfiguredRequestBody.applyJson(modelConfig, OBJECT_MAPPER.writeValueAsString(createRequest), request));
+                    body);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 log.error("Volcengine 视频生成提交失败, model={}, httpStatus={}, responseLength={}",
                         effectiveModel, response.statusCode(), StringUtils.length(response.body()));
-                return com.aid.media.provider.ProviderSubmissionFailures.httpResponse(
+                if (strictArk) {
+                    String id = com.aid.media.provider.ProviderResponseHelper.readText(
+                            com.aid.media.provider.ProviderResponseHelper.readTree(response.body()),
+                            "id", "details.generation_id", "error.details.generation_id");
+                    if (StringUtils.isNotBlank(id)) {
+                        ProviderSubmitResult accepted = com.aid.media.provider.ProviderSubmissionFailures
+                                .unknownResponse("上游返回任务标识，继续查询确认结果");
+                        accepted.setProviderTaskId(id);
+                        return accepted;
+                    }
+                }
+                ProviderSubmitResult rejection = com.aid.media.provider.ProviderSubmissionFailures.httpResponse(
                         response.statusCode(), response.body(), effectiveModel);
+                if (strictArk && rejection.getConfirmedFailureCode() != null) {
+                    applyStrictArkError(rejection, modelConfig, response.statusCode(), response.body());
+                }
+                return rejection;
             }
             com.fasterxml.jackson.databind.JsonNode envelope = OBJECT_MAPPER.readTree(response.body());
             if (envelope != null && envelope.path("error").isObject()) {
@@ -135,8 +182,12 @@ public class VolcengineVideoProviderClient implements VideoProviderClient {
                     accepted.setProviderTaskId(envelope.path("id").asText());
                     return accepted;
                 }
-                return com.aid.media.provider.ProviderSubmissionFailures.reportedFailure(
+                ProviderSubmitResult rejection = com.aid.media.provider.ProviderSubmissionFailures.reportedFailure(
                         response.body(), effectiveModel);
+                if (strictArk && rejection.getConfirmedFailureCode() != null) {
+                    applyStrictArkError(rejection, modelConfig, response.statusCode(), response.body());
+                }
+                return rejection;
             }
             result = OBJECT_MAPPER.readValue(response.body(), CreateContentGenerationTaskResult.class);
         } catch (Exception e) {
@@ -199,10 +250,12 @@ public class VolcengineVideoProviderClient implements VideoProviderClient {
             errorMessage = resp.getError().getMessage();
         }
 
-        String normalized = normalizeStatus(resp.getStatus());
+        boolean arkEnded = usesStrictArkContract(modelConfig)
+                && ("expired".equalsIgnoreCase(resp.getStatus()) || "cancelled".equalsIgnoreCase(resp.getStatus()));
+        String normalized = arkEnded ? VolcengineConstants.TASK_STATUS_FAILED : normalizeStatus(resp.getStatus());
         log.info("Volcengine 视频生成查询, taskId={}, status={}, normalized={}", providerTaskId, resp.getStatus(), normalized);
 
-        if (!isKnownStatus(resp.getStatus())) {
+        if (!arkEnded && !isKnownStatus(resp.getStatus())) {
             return ProviderTaskResult.builder()
                     .status(VolcengineConstants.TASK_STATUS_PROCESSING)
                     .errorMessage(StringUtils.isBlank(resp.getStatus())
@@ -245,7 +298,7 @@ public class VolcengineVideoProviderClient implements VideoProviderClient {
                 .rawResponse(raw)
                 .querySuccessful(Boolean.TRUE)
                 .providerStatus(resp.getStatus())
-                .terminalConfirmed(isTerminalStatus(resp.getStatus()))
+                .terminalConfirmed(arkEnded || isTerminalStatus(resp.getStatus()))
                 .videoDurationSeconds(resp.getDuration() == null || resp.getDuration() <= 0
                         ? null : Math.toIntExact(Math.min(resp.getDuration(), Integer.MAX_VALUE)))
                 .completionTokens(completionTokens <= 0 ? null : completionTokens)
@@ -546,13 +599,135 @@ public class VolcengineVideoProviderClient implements VideoProviderClient {
 
     /** 任务落库和预冻结前的无网络完整契约校验。 */
     public static void validateFullRequest(AiModelConfigVo modelConfig, MediaVideoGenerateRequest request) {
+        validateFullRequest(modelConfig, request, false);
+    }
+
+    public static void validateFullRequest(AiModelConfigVo modelConfig, MediaVideoGenerateRequest request,
+                                           boolean promptPending) {
         VolcengineVideoProviderClient validator = new VolcengineVideoProviderClient();
+        if (validator.usesStrictArkContract(modelConfig)) {
+            MediaVideoGenerateRequest outbound = new MediaVideoGenerateRequest();
+            BeanUtil.copyProperties(request, outbound);
+            List<CreateContentGenerationTaskRequest.Content> contents = validator.buildContents(outbound, modelConfig, false);
+            validator.buildStrictArkRequest(validator.resolveEffectiveModel(modelConfig, outbound),
+                    contents, outbound, modelConfig, promptPending);
+            return;
+        }
         List<CreateContentGenerationTaskRequest.Content> contents =
                 validator.buildContents(request, modelConfig, false);
         ModelCapabilityValidator.validatePrompt(modelConfig, request.getPrompt());
         validator.validateTimestampInstructions(request, modelConfig);
         validator.buildCreateRequest(validator.resolveEffectiveModel(modelConfig, request),
                 contents, request, modelConfig);
+    }
+
+    private void applyStrictArkError(ProviderSubmitResult rejection, AiModelConfigVo config,
+                                     int httpStatus, String body) {
+        // 供应商规则读取原始 Ark 错误信封，任务仅持久化安全错误快照。
+        var error = ErrorNormalizer.classify(config.getProviderCode(), config.getModelCode(), httpStatus, body);
+        rejection.setErrorDetailJson(TaskErrorSnapshot.write(error));
+        rejection.setSubmissionErrorMessage(error.getUserMessage());
+        var envelope = com.aid.media.provider.ProviderResponseHelper.readTree(body);
+        String code = com.aid.media.provider.ProviderResponseHelper.readText(envelope, "error.code", "code");
+        if (code != null && code.matches("[A-Za-z][A-Za-z0-9_.-]{0,63}")) {
+            log.warn("Ark 兼容视频请求被拒绝, provider={}, httpStatus={}, upstreamCode={}",
+                    config.getProviderCode(), httpStatus, code);
+        }
+    }
+
+    private boolean usesStrictArkContract(AiModelConfigVo modelConfig) {
+        return Boolean.TRUE.equals(readCapabilityBoolean(modelConfig, "strictArkCompatibility"));
+    }
+
+    private String strictArkWireBody(String json, MediaVideoGenerateRequest request) throws Exception {
+        Map<String, Object> body = OBJECT_MAPPER.readValue(json, new TypeReference<>() {});
+        String protectedJson = OBJECT_MAPPER.writeValueAsString(
+                com.aid.media.security.PromptConfidentialityPolicy.protectMediaBody(body, request));
+        if (protectedJson.getBytes(StandardCharsets.UTF_8).length > 64_000_000) {
+            throw com.aid.media.provider.ProviderSubmissionFailures.notSent("视频请求超过 64000000 字节");
+        }
+        return protectedJson;
+    }
+
+    /** Ark 兼容端点只接受显式允许的字段，不带入火山专用默认值。 */
+    private Map<String, Object> buildStrictArkRequest(String model, List<CreateContentGenerationTaskRequest.Content> contents,
+                                                   MediaVideoGenerateRequest request, AiModelConfigVo config,
+                                                   boolean promptPending) {
+        Map<String, Object> options = request.getOptions() == null ? Map.of() : request.getOptions();
+        String prompt = request.getPrompt();
+        require(promptPending || !contents.isEmpty(), "需要提示词或参考素材", config);
+        require(prompt == null || prompt.codePointCount(0, prompt.length()) <= 15000, "提示词最多 15000 字符", config);
+        require(contents.size() <= 21, "参考素材超过上限", config);
+        List<Map<String, Object>> media = new ArrayList<>(contents.size());
+        for (var content : contents) {
+            String type = content.getType();
+            if (VolcengineConstants.CONTENT_TYPE_TEXT.equals(type)) {
+                require(StringUtils.isNotBlank(content.getText()), "提示词不能为空", config);
+                media.add(Map.of("type", type, "text", content.getText()));
+                continue;
+            }
+            String url = switch (type) {
+                case VolcengineConstants.CONTENT_TYPE_IMAGE_URL -> content.getImageUrl().getUrl();
+                case VolcengineConstants.CONTENT_TYPE_VIDEO_URL -> content.getVideoUrl().getUrl();
+                case VolcengineConstants.CONTENT_TYPE_AUDIO_URL -> content.getAudioUrl().getUrl();
+                default -> throw new ServiceException("参考素材类型无效");
+            };
+            validateStrictArkMediaUrl(url, type.substring(0, type.length() - "_url".length()), config);
+            require(StringUtils.isNotBlank(content.getRole()), "参考素材角色不能为空", config);
+            media.add(Map.of("type", type, "role", content.getRole(), type, Map.of("url", url)));
+        }
+        String resolution = resolveResolution(request, config);
+        String ratio = resolveRatio(request, config);
+        Integer duration = request.getDurationSeconds() == null ? config.getDefaultDurationSeconds() : request.getDurationSeconds();
+        require("1080p".equalsIgnoreCase(resolution), "分辨率仅支持 1080p", config);
+        require(isSeedance25Ratio(ratio) && !"adaptive".equalsIgnoreCase(ratio), "比例无效", config);
+        require(duration != null && duration >= 4 && duration <= 30, "时长必须为 4–30 秒", config);
+        validateCapabilityOption(config, "sizeOptions", resolution, "resolution unsupported");
+        validateCapabilityOption(config, "aspectRatioOptions", ratio, "ratio unsupported");
+        validateCapabilityOption(config, "durationOptions", String.valueOf(duration), "duration unsupported");
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", model);
+        body.put("content", media);
+        body.put("duration", duration);
+        body.put("ratio", ratio);
+        body.put("resolution", "1080p");
+        Boolean audio = resolveGenerateAudio(request);
+        if (audio != null) {
+            body.put("generate_audio", audio);
+        }
+        if (options.get("enhance_prompt") != null) {
+            body.put("enhance_prompt", requireBooleanOption(options, "enhance_prompt", config));
+        }
+        if (options.containsKey("seed")) {
+            long seed = requireLongOption(options, "seed", config);
+            require(seed >= -1 && seed <= 4294967295L, "随机种子超出范围", config);
+            body.put("seed", seed);
+        }
+        if (options.containsKey("omni_reference_task_type")) {
+            require("auto".equals(options.get("omni_reference_task_type")), "参考任务类型仅支持 auto", config);
+            body.put("omni_reference_task_type", "auto");
+        }
+        return body;
+    }
+
+    private void validateStrictArkMediaUrl(String source, String type, AiModelConfigVo config) {
+        require(StringUtils.isNotBlank(source), "参考素材地址不能为空", config);
+        if (source.startsWith("data:") && !"video".equals(type)) {
+            require(source.startsWith("data:" + type + "/") && source.indexOf(";base64,") > 0,
+                    "参考素材的内联格式无效", config);
+            return;
+        }
+        try {
+            URI uri = URI.create(source);
+            if ("asset".equals(uri.getScheme()) && source.matches("asset://[1-9][0-9]{0,18}")) {
+                Long.parseLong(uri.getAuthority());
+                return;
+            }
+            require(source.length() <= 8192 && "https".equalsIgnoreCase(uri.getScheme()) && uri.getHost() != null
+                    && uri.getRawUserInfo() == null && uri.getRawFragment() == null, "参考素材须使用 HTTPS 地址", config);
+        } catch (IllegalArgumentException invalidUrl) {
+            throw new ServiceException("参考素材地址无效");
+        }
     }
 
     private void validateSceneMaterials(MediaVideoGenerateRequest request, AiModelConfigVo modelConfig) {
@@ -815,13 +990,14 @@ public class VolcengineVideoProviderClient implements VideoProviderClient {
         if (request == null || request.getOptions() == null) {
             return;
         }
+        Set<String> allowed = usesStrictArkContract(modelConfig) ? STRICT_ARK_OPTION_KEYS : REQUEST_OPTION_KEYS;
         for (String key : request.getOptions().keySet()) {
             // 业务扇入、恢复和计费元数据只在站内消费，不属于厂商参数。
             // 请求体仍由官方字段显式组装，未知的生成参数继续拒绝。
             if (MediaInternalOptionKeys.isInternal(key)) {
                 continue;
             }
-            require(REQUEST_OPTION_KEYS.contains(key), "unsupported option: " + key, modelConfig);
+            require(allowed.contains(key), "unsupported option: " + key, modelConfig);
         }
     }
 

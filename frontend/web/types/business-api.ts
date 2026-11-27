@@ -1075,6 +1075,7 @@ export interface RoleVoiceBindingVO {
   bindingId?: number
   assetId?: number
   voiceLibraryId?: number
+  personalAudioAssetId?: string | number
   voiceCode?: string | null
   voiceName?: string | null
   avatarUrl?: string | null
@@ -1707,7 +1708,16 @@ export interface UserStoryboardSpeakerVoice {
   voiceName?: string | null
 }
 
+export interface StoryboardImageReference {
+  index: number
+  name: string
+  imageId?: string
+  sourceUrl?: string
+}
+
 export interface UserStoryboardListRow {
+  scriptImageReferences?: StoryboardImageReference[] | null
+  imagePromptReferences?: StoryboardImageReference[] | null
   id: number
   projectId: number
   episodeId?: number
@@ -1791,6 +1801,7 @@ export interface UserStoryboardDeleteRequest {
 
 /** /api/user/storyboard/update */
 export interface UserStoryboardUpdateRequest {
+  scriptImageReferences?: StoryboardImageReference[]
   id: number
   title?: string
   storyScript?: string
@@ -2067,7 +2078,7 @@ export interface StoryboardImagePromptReferenceItem {
 }
 
 /** image-prompt/resolve 出参 audioReferences[] 子项 */
-export type StoryboardAudioReferenceSourceType = 'VOICE_SAMPLE' | 'AUDIO_RECORD' | 'UPLOAD'
+export type StoryboardAudioReferenceSourceType = 'VOICE_SAMPLE' | 'AUDIO_RECORD' | 'UPLOAD' | 'PERSONAL_VOICE'
 
 export interface StoryboardAudioReferenceItem {
   index?: number | null
@@ -2316,6 +2327,7 @@ export interface StoryboardImageGenerateItemResult {
 
 /** POST /api/user/storyboard/generate/image（v2.63+ 批量父任务 + 智能体标准链路） */
 export interface StoryboardGenerateImageRequest {
+  imageReferences?: StoryboardImageReference[]
   storyboardIds: number[]
   agentCode?: string
   /** 仅单镜头生效；多镜头各镜头回落库内 image_prompt */
@@ -2532,6 +2544,7 @@ export interface StoryboardAudioTaskVO {
 
 /** POST /api/user/storyboard/lipSync */
 export interface StoryboardLipSyncRequest {
+  referenceAudioId?: number
   storyboardId: number
   voiceLibraryId?: number
   voiceModelId?: number

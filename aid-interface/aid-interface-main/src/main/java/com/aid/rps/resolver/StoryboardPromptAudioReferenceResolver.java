@@ -20,6 +20,8 @@ import com.aid.aid.domain.AidAudioRecord;
 import com.aid.aid.domain.AidReferenceAudio;
 import com.aid.aid.domain.AidRolePropScene;
 import com.aid.aid.domain.AidRoleVoiceBinding;
+import com.aid.aid.domain.AidAudioAsset;
+import com.aid.asset.audio.service.impl.PersonalVoiceAssetService;
 import com.aid.aid.service.IAidAudioRecordService;
 import com.aid.aid.service.IAidReferenceAudioService;
 import com.aid.aid.service.IAidRolePropSceneService;
@@ -74,6 +76,9 @@ public class StoryboardPromptAudioReferenceResolver
     @Autowired
     private MediaUrlResolver mediaUrlResolver;
 
+    @Autowired
+    private PersonalVoiceAssetService personalVoiceAssets;
+
     /**
      * 解析提示词中的音频占位与用户显式选择的两类音频。
      * 三条来源在此汇合成同一个 {@link ReferenceAudioInput} 列表，
@@ -102,7 +107,7 @@ public class StoryboardPromptAudioReferenceResolver
         List<Long> unresolvedUploadIds = new ArrayList<>();
         if (CollectionUtil.isNotEmpty(names))
         {
-            resolveVoiceSamples(names, projectId, episodeId, userId, references, unresolved);
+            resolveVoiceSamples(names, projectId, episodeId, userId, references, unresolved, result.getUnavailablePersonalVoices());
         }
         int nextIndex = names.keySet().stream().max(Integer::compareTo).orElse(0) + 1;
         nextIndex = resolveAudioRecords(audioRecordIds, projectId, episodeId, userId, nextIndex,
@@ -158,7 +163,7 @@ public class StoryboardPromptAudioReferenceResolver
     }
 
     private void resolveVoiceSamples(Map<Integer, String> names, Long projectId, Long episodeId, Long userId,
-            List<ReferenceAudioInput> references, List<String> unresolved)
+            List<ReferenceAudioInput> references, List<String> unresolved, List<String> unavailablePersonalVoices)
     {
         List<AidRolePropScene> characters = rolePropSceneService.list(
                 Wrappers.<AidRolePropScene>lambdaQuery()
@@ -168,14 +173,43 @@ public class StoryboardPromptAudioReferenceResolver
                         .eq(AidRolePropScene::getAssetType, ASSET_TYPE_CHARACTER)
                         .eq(AidRolePropScene::getDelFlag, DEL_FLAG_NORMAL));
         Map<Long, AidRoleVoiceBinding> bindings = loadBindings(characters, projectId, episodeId, userId);
+        List<Long> personalIds = bindings.values().stream().map(AidRoleVoiceBinding::getPersonalAudioAssetId)
+                .filter(Objects::nonNull).distinct().toList();
+        Map<Long, AidAudioAsset> personal = personalIds.isEmpty() ? Map.of() : personalVoiceAssets.findOwned(personalIds, userId);
         List<Map.Entry<Integer, String>> ordered = new ArrayList<>(names.entrySet());
         ordered.sort(Map.Entry.comparingByKey());
         Set<Long> emittedBindingIds = new LinkedHashSet<>();
         for (Map.Entry<Integer, String> entry : ordered)
         {
-            AidRolePropScene character = matchCharacter(entry.getValue(), characters);
-            AidRoleVoiceBinding binding = Objects.isNull(character) ? null : bindings.get(character.getId());
-            // 角色绑了上传参考音频就用它，否则回落音色库试听样音
+            List<AidRolePropScene> matches = matchCharacters(entry.getValue(), characters);
+            if (matches.size() > 1 && matches.stream().map(role -> bindings.get(role.getId()))
+                    .anyMatch(binding -> binding != null && binding.getPersonalAudioAssetId() != null)) {
+                unavailablePersonalVoices.add(entry.getValue());
+                continue;
+            }
+            AidRolePropScene character = matches.isEmpty() ? null : matches.get(0);
+            AidRoleVoiceBinding binding = character == null ? null : bindings.get(character.getId());
+            if (binding != null && binding.getPersonalAudioAssetId() != null) {
+                AidAudioAsset recording = personal.get(binding.getPersonalAudioAssetId());
+                if (recording == null || StrUtil.isBlank(recording.getAudioUrl())) {
+                    unavailablePersonalVoices.add(entry.getValue());
+                } else if (emittedBindingIds.add(binding.getId())) {
+                    ReferenceAudioInput input = new ReferenceAudioInput();
+                    input.setIndex(entry.getKey());
+                    input.setName(entry.getValue());
+                    input.setSourceType(ReferenceAudioInput.SOURCE_PERSONAL_VOICE);
+                    input.setAssetId(character.getId());
+                    input.setBindingId(binding.getId());
+                    input.setPersonalAudioAssetId(recording.getId());
+                    input.setVoiceName(recording.getAssetTitle());
+                    input.setSampleUrl(mediaUrlResolver.toFullUrl(recording.getAudioUrl()));
+                    input.setFormat(recording.getAudioFormat());
+                    input.setDurationMs(recording.getDurationMs());
+                    references.add(input);
+                }
+                continue;
+            }
+            // 平台音色原有解析口径
             boolean useUploaded = Objects.nonNull(binding) && StrUtil.isNotBlank(binding.getReferenceAudioUrl());
             String relativeUrl = Objects.isNull(binding) ? null
                     : (useUploaded ? binding.getReferenceAudioUrl() : binding.getSampleUrl());
@@ -276,6 +310,7 @@ public class StoryboardPromptAudioReferenceResolver
                 Wrappers.<AidRoleVoiceBinding>lambdaQuery()
                         .select(AidRoleVoiceBinding::getId, AidRoleVoiceBinding::getAssetId,
                                 AidRoleVoiceBinding::getEpisodeId, AidRoleVoiceBinding::getVoiceLibraryId,
+                                AidRoleVoiceBinding::getPersonalAudioAssetId,
                                 AidRoleVoiceBinding::getVoiceName, AidRoleVoiceBinding::getSampleUrl,
                                 AidRoleVoiceBinding::getSampleDurationMs,
                                 AidRoleVoiceBinding::getReferenceAudioId,
@@ -305,16 +340,19 @@ public class StoryboardPromptAudioReferenceResolver
         return result;
     }
 
-    private AidRolePropScene matchCharacter(String audioName, List<AidRolePropScene> characters)
+    private List<AidRolePropScene> matchCharacters(String audioName, List<AidRolePropScene> characters)
     {
         String normalized = normalizeAudioName(audioName);
-        return characters.stream()
+        List<AidRolePropScene> candidates = characters.stream()
                 .filter(character -> {
                     String roleName = normalizeAudioName(character.getName());
-                    return Objects.equals(normalized, roleName) || normalized.startsWith(roleName + "_");
+                    return StrUtil.isNotBlank(roleName) && (normalized.equals(roleName) || normalized.startsWith(roleName + "_"));
                 })
-                .max(Comparator.comparingInt(character -> StrUtil.length(character.getName())))
-                .orElse(null);
+                .sorted(Comparator.comparingInt((AidRolePropScene role) -> normalizeAudioName(role.getName()).length()).reversed())
+                .toList();
+        if (candidates.isEmpty()) return candidates;
+        int bestLength = normalizeAudioName(candidates.get(0).getName()).length();
+        return candidates.stream().takeWhile(role -> normalizeAudioName(role.getName()).length() == bestLength).toList();
     }
 
     /**
@@ -464,6 +502,9 @@ public class StoryboardPromptAudioReferenceResolver
 
         /** 未解析音频引用名（提示词占位推导，不可用时降级跳过）。 */
         private List<String> unresolvedAudioNames = Collections.emptyList();
+
+        @JsonIgnore
+        private final List<String> unavailablePersonalVoices = new ArrayList<>();
 
         /** 未解析的音频记录 ID（用户显式选择，不可用时必须报错）。 */
         private List<Long> unresolvedAudioRecordIds = Collections.emptyList();

@@ -66,6 +66,7 @@ export const StudioComposerPromptEditor = forwardRef<
     onMentionChipClick?: (attrs: StudioComposerMentionAttrs, rect: DOMRect) => void
     onCameraMarkClick?: (mark: StudioCameraMark) => void
     onSubmit?: () => void
+    onRejectedLength?: (length: number, limit: number) => void
     resolveMaxLength?: (prompt: string) => number
   }
 >(function StudioComposerPromptEditor(
@@ -81,7 +82,7 @@ export const StudioComposerPromptEditor = forwardRef<
     onMentionChipClick,
     onCameraMarkClick,
     onSubmit,
-    resolveMaxLength
+    resolveMaxLength, onRejectedLength
   },
   ref
 ) {
@@ -98,6 +99,8 @@ export const StudioComposerPromptEditor = forwardRef<
   const onMentionChipClickRef = useRef(onMentionChipClick)
   const onCameraMarkClickRef = useRef(onCameraMarkClick)
   const onSubmitRef = useRef(onSubmit)
+  const rejectedLengthRef = useRef(onRejectedLength)
+  rejectedLengthRef.current = onRejectedLength
   const resolveMaxLengthRef = useRef(resolveMaxLength)
   const placeholderRef = useRef(placeholder ?? '')
   const [contextSelection, setContextSelection] = useState<{ from: number; to: number }>({ from: 0, to: 0 })
@@ -144,11 +147,13 @@ export const StudioComposerPromptEditor = forwardRef<
           const nextPrompt = serializeStudioPromptSpans(
             tiptapDocToStudioPromptSpans(transaction.doc.toJSON(), refsByIdRef.current)
           )
-          return canApplyStudioComposerPromptChange(
+          const accepted = canApplyStudioComposerPromptChange(
             previousPrompt,
             nextPrompt,
             resolveMaxLengthRef.current
           )
+          if (!accepted) rejectedLengthRef.current?.(nextPrompt.length, resolveMaxLengthRef.current(nextPrompt))
+          return accepted
         }
       })]
     }

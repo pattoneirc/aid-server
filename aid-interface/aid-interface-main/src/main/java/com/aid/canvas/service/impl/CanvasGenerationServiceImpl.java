@@ -323,7 +323,7 @@ public class CanvasGenerationServiceImpl implements CanvasGenerationService, Gen
                 resource.getMediaType(), mediaUrlResolver.toFullUrl(resource.getStorageUrl()), resource.getFileSize(),
                 resource.getMimeType(), resource.getMetadataJson(), null)).toList();
         Map<String, Object> options = new java.util.LinkedHashMap<>(request.getOptions() == null ? Map.of() : request.getOptions());
-        com.aid.generation.service.GenerationVideoReferences.apply(request, resolved, options);
+        com.aid.generation.service.GenerationVideoReferences.apply(request, resolved, options, mediaUrlResolver);
     }
 
     @Override

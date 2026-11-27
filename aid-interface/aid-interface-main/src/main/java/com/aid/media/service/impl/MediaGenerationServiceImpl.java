@@ -186,7 +186,7 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
     private static final int MILLIS_PER_SECOND = 1000;
     // 正式 TTS 任务允许的音频格式；业务入口和统一任务入口双重校验，禁止非法值进入预冻结。
     private static final Set<String> AUDIO_FORMATS = Set.of("mp3", "wav", "pcm", "ogg_opus", "opus", "flac");
-    // 豆包与 MiniMax 当前支持采样率的并集；具体模型不支持时仍由 Provider 返回明确失败并统一退款。
+    // 音频模型支持采样率的并集；具体模型不支持时仍由 Provider 返回明确失败并统一退款。
     private static final Set<Integer> AUDIO_SAMPLE_RATES = Set.of(8000, 16000, 22050, 24000, 32000, 44100, 48000);
     // 业务含义：单次批量提交媒体任务条数上限，与接口约定一致，避免一次请求压垮上游或长事务。
     // 可通过 aid.chat.media.batch.max-size 配置，默认 20。
@@ -468,7 +468,7 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
         }
         ModelInputCapabilityValidator.validateVideoQuote(modelConfig, request, false);
         if (verifyMetadata) verifiedMediaInputService.video(modelConfig, request);
-        else verifiedMediaInputService.videoQuoteImageAspectRatios(modelConfig, request);
+        else verifiedMediaInputService.validateVideoQuoteImages(modelConfig, request);
         ModelCapabilityValidator.normalizeAndValidateReferenceAudios(modelConfig, request);
         if (verifyMetadata) ModelInputCapabilityValidator.validateVideo(modelConfig, request);
         else ModelInputCapabilityValidator.validateVideoQuote(modelConfig, request, false);
@@ -934,9 +934,6 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
         } catch (RuntimeException rejected) {
             throw notEntered(request == null ? null : request.getBillingBudgetContext(),
                     "MEDIA_AUDIO_PRETASK_REJECTED", rejected);
-        }
-        if (operatorAdminId == null && "tokendance:minimax:voice_clone".equals(preparedBilling.modelConfig().getProtocol())) {
-            throw new ServiceException("请在后台创建音色");
         }
 
         Long effectiveUserId = request.getUserId() != null ? request.getUserId() : getCurrentUserIdSafe();
@@ -4097,7 +4094,7 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
             }
             if (modelConfig != null
                 && VolcengineConstants.PROTOCOL_SEEDANCE_VIDEO.equalsIgnoreCase(StrUtil.trim(modelConfig.getProtocol()))) {
-                VolcengineVideoProviderClient.validateFullRequest(modelConfig, request);
+                VolcengineVideoProviderClient.validateFullRequest(modelConfig, request, promptPending);
                 return;
             }
             if (modelConfig != null
@@ -5286,9 +5283,12 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
                     task.getId(), task.getProtocol(), task.getModelName());
             submitStartMs = System.currentTimeMillis();
             if (Objects.equals(task.getMediaType(), MediaType.IMAGE.name())) {
-                MediaImageGenerateRequest imgReq = JSONUtil.toBean(task.getRequestJson(), MediaImageGenerateRequest.class);
-                var managedReferences = JSONUtil.parseObj(task.getRequestJson())
-                        .getJSONObject(MediaTaskPayloadSanitizer.MANAGED_REFERENCE_IMAGES);
+                var imagePayload = JSONUtil.parseObj(task.getRequestJson());
+                MediaImageGenerateRequest imgReq = imagePayload.toBean(MediaImageGenerateRequest.class);
+                var storedReferences = imagePayload.getJSONArray(MediaTaskPayloadSanitizer.STORED_REFERENCE_IMAGES);
+                if (storedReferences != null && !storedReferences.isEmpty())
+                    imgReq.setStoredReferenceImages(storedReferences.toList(String.class));
+                var managedReferences = imagePayload.getJSONObject(MediaTaskPayloadSanitizer.MANAGED_REFERENCE_IMAGES);
                 if (managedReferences != null && !managedReferences.isEmpty()) {
                     Map<String, String> references = new LinkedHashMap<>();
                     managedReferences.forEach((url, reference) -> {
@@ -5297,8 +5297,7 @@ public class MediaGenerationServiceImpl implements IMediaGenerationService, Medi
                     imgReq.setUserId(task.getUserId());
                     imgReq.setManagedReferenceImages(references);
                 }
-                var deliveryImages = JSONUtil.parseObj(task.getRequestJson())
-                        .getJSONObject(MediaTaskPayloadSanitizer.DELIVERY_AUTHORIZED_IMAGES);
+                var deliveryImages = imagePayload.getJSONObject(MediaTaskPayloadSanitizer.DELIVERY_AUTHORIZED_IMAGES);
                 if (deliveryImages != null && !deliveryImages.isEmpty()) {
                     Map<String, com.aid.media.dto.AuthorizedImageAssetSnapshot> references = new LinkedHashMap<>();
                     deliveryImages.forEach((url, value) -> references.put(url,

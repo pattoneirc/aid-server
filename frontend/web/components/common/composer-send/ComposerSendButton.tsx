@@ -153,7 +153,7 @@ export function ComposerSendButton({
     </button>
   )
 
-  if (visualState === 'empty') {
+  if (visualState === 'empty' && emptyTooltip) {
     return (
       <Tooltip title={emptyTooltip}>
         <span className="composer-send-button__tooltip-wrap">{button}</span>

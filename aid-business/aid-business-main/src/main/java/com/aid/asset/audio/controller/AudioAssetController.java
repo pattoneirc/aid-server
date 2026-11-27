@@ -6,6 +6,7 @@ import com.aid.asset.audio.dto.AudioAssetDetailRequest;
 import com.aid.asset.audio.dto.AudioAssetListRequest;
 import com.aid.asset.audio.dto.AudioAssetRenameRequest;
 import com.aid.asset.audio.service.IAudioAssetBusinessService;
+import com.aid.asset.audio.service.impl.PersonalVoiceAssetService;
 import com.aid.asset.audio.vo.AudioAssetVO;
 import com.aid.common.core.controller.BaseController;
 import com.aid.common.core.domain.AjaxResult;
@@ -16,7 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * C 端音频资产 Controller
@@ -32,6 +35,26 @@ public class AudioAssetController extends BaseController {
 
     @Resource
     private IAudioAssetBusinessService audioAssetBusinessService;
+
+    @Resource
+    private PersonalVoiceAssetService personalVoiceAssets;
+
+    @PostMapping("/personal/upload")
+    public AjaxResult uploadPersonal(@RequestParam("file") MultipartFile file,
+            @RequestParam("name") String name, @RequestParam(value = "avatar", required = false) MultipartFile avatar) {
+        Long userId = SecurityUtils.getUserId();
+        Long id = personalVoiceAssets.upload(file, name, avatar, userId);
+        return success(audioAssetBusinessService.getDetailForClient(id, userId));
+    }
+
+    @PostMapping("/personal/update")
+    public AjaxResult updatePersonal(@RequestParam("id") Long id, @RequestParam("name") String name,
+            @RequestParam(value = "avatar", required = false) MultipartFile avatar,
+            @RequestParam(value = "resetAvatar", defaultValue = "false") boolean resetAvatar) {
+        Long userId = SecurityUtils.getUserId();
+        personalVoiceAssets.update(id, name, avatar, resetAvatar, userId);
+        return success(audioAssetBusinessService.getDetailForClient(id, userId));
+    }
 
     /**
      * C 端分页列表：硬过滤当前用户 + del_flag=0。

@@ -32,6 +32,22 @@ export async function userReferenceAudioUpload(
   return unwrap(res) as ReferenceAudioVO
 }
 
+/** 上传并登记用于对口型的原录音。 */
+export async function userReferenceAudioUploadFile(
+  file: File, projectId: number, episodeId?: number
+): Promise<ReferenceAudioVO> {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('projectId', String(projectId))
+  if (episodeId && episodeId > 0) body.append('episodeId', String(episodeId))
+  const res = await request.post<ApiEnvelope<ReferenceAudioVO>>(
+    '/api/user/reference-audio/upload-file',
+    body,
+    { timeout: 180_000, headers: { 'Content-Type': false } as unknown as Record<string, string> }
+  )
+  return unwrap(res)
+}
+
 /** 逻辑删除参考音频 POST /api/user/reference-audio/delete */
 export async function userReferenceAudioDelete(body: ReferenceAudioDeleteRequest): Promise<void> {
   await request.post<ApiEnvelope<unknown>>('/api/user/reference-audio/delete', body)

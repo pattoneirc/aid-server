@@ -81,24 +81,6 @@
         "protocol:minimax:video_generation_v2"
       ]
     },
-    "minimax:t2a_v2": {
-      "minimumAppVersion": "2.0.1",
-      "requiredFeatures": [
-        "protocol:minimax:t2a_v2"
-      ]
-    },
-    "minimax:t2a_v2_ws": {
-      "minimumAppVersion": "2.0.1",
-      "requiredFeatures": [
-        "protocol:minimax:t2a_v2_ws"
-      ]
-    },
-    "minimax:voice_clone": {
-      "minimumAppVersion": "2.0.1",
-      "requiredFeatures": [
-        "protocol:minimax:voice_clone"
-      ]
-    },
     "ark:tts": {
       "minimumAppVersion": "2.0.1",
       "requiredFeatures": [

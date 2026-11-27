@@ -332,6 +332,7 @@ public class StoryboardImageReferenceResolver
             {
                 // 命中可用图 → 引用类型
                 ref.setType(RefType.REFERENCE);
+                ref.setImageId(hit.getId());
                 ref.setUrl(mediaUrlResolver.toFullUrl(hit.getImageUrl()));
                 AidRolePropScene asset = Objects.nonNull(hit.getAssetId()) ? assetById.get(hit.getAssetId()) : null;
                 if (Objects.nonNull(asset))
@@ -455,6 +456,9 @@ public class StoryboardImageReferenceResolver
     @Data
     public static class ResolvedImageReference
     {
+        /** 被解析为参考图的具体形态图片。 */
+        private Long imageId;
+
         /** 占位编号 N（与 prompt 内 @图片N 对应）。 */
         private int n;
         /** 占位内名字（= form_image.name）。 */

@@ -23,6 +23,7 @@ export type ImageResultItem = {
 export function parseCompleteData(raw: unknown): {
   imageUrl: string | null
   recordId: number | null
+  recordIds?: number[]
   items: ImageResultItem[]
   successCount?: number
   totalCount?: number
@@ -90,6 +91,7 @@ export function parseCompleteData(raw: unknown): {
   return {
     imageUrl,
     recordId: resolvedRecordId,
+    recordIds,
     items,
     successCount,
     totalCount
@@ -131,6 +133,7 @@ export type StoryboardImageGenerateResult =
       ok: true
       taskId: number
       recordId: number | null
+      recordIds?: number[]
       imageUrl: string | null
       items?: ImageResultItem[]
     }
@@ -197,6 +200,7 @@ export async function buildStoryboardImageSuccess(payload: {
     ok: true,
     taskId,
     recordId: resolvedRecordId,
+    recordIds: scopedItems.length ? scopedItems.map(item => Number(item.recordId ?? item.imageId)) : parsed.recordIds,
     imageUrl,
     items: scopedItems.length ? scopedItems : parsed.items.length ? parsed.items : undefined
   }
@@ -236,6 +240,7 @@ function dispatchStoryboardImageGenSseComplete(detail: {
   taskId: number
   storyboardId: number
   recordId: number | null
+  recordIds?: number[]
   items: ImageResultItem[]
   successCount?: number
   totalCount?: number
@@ -287,6 +292,7 @@ export function emitStoryboardImageCompleteProgress(
     taskId: payload.taskId,
     storyboardId,
     recordId,
+    recordIds: payload.storyboardId > 0 ? parsed.recordIds : undefined,
     items,
     successCount: parsed.successCount,
     totalCount: parsed.totalCount

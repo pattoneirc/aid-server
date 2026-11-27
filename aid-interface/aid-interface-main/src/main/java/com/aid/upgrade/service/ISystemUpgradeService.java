@@ -90,6 +90,10 @@ public interface ISystemUpgradeService {
      */
     String rollback(RollbackRequestDto requestDto);
 
+    com.alibaba.fastjson2.JSONObject getVersionBackups();
+
+    String saveVersionBackupSettings(UpgradeSourceSaveDto saveDto);
+
     /**
      * 查询升级源配置
      *

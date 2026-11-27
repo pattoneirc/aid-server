@@ -114,6 +114,12 @@ public class AidStoryboard extends BaseEntity implements Serializable
     @TableField(value = "image_prompt")
     private String imagePrompt;
 
+    /** 显式脚本参考图。 */
+    private String scriptImageReferences;
+
+    /** 手动保存的出图参考图。空数组表示当前提示词未绑定显式参考图。 */
+    private String imagePromptReferences;
+
     /**
      * 分镜画师智能体的原始输出（JSON 数组形式，含可能的 markdown 包装）。
      * 仅供排查与回溯用，业务消费请用 {@link #imagePrompt}。

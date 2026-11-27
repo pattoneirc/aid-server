@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Select, message } from 'antd'
 import { AudioPickerModal } from './AudioPickerModal'
+import { PersonalVoiceLibrary } from './PersonalVoiceLibrary'
+import { HomeSegmented } from '~/components/home/theme/HomeSegmented'
+import type { PersonalVoiceAsset } from '~/utils/business/personalVoice'
 import iconStartRaw from '~/assets/img/icon/icon_start.svg'
 import { assetUrl } from '~/utils/assetUrl'
 import { ShimmerImage } from '~/components/common/ShimmerImage'
@@ -37,6 +40,7 @@ export type VoiceTimbreConfirmPayload = {
   id: string
   previewUrl: string
   voiceLibraryId?: number
+  personalAudioAssetId?: string
   voiceModelId?: number
   timbreCode?: string
   providerName?: string
@@ -46,6 +50,9 @@ export type VoiceTimbreConfirmPayload = {
 export interface VoiceTimbrePickerModalProps {
   open: boolean
   initialVoiceName?: string
+  initialVoiceId?: string
+  allowPersonalVoices?: boolean
+  showRoleVoiceHint?: boolean
   onOpenChange: (open: boolean) => void
   onConfirm: (payload: VoiceTimbreConfirmPayload) => void
 }
@@ -63,10 +70,15 @@ const AGE_MAP: Record<string, string> = {
 export function VoiceTimbrePickerModal({
   open,
   initialVoiceName,
+  initialVoiceId,
+  allowPersonalVoices = false,
+  showRoleVoiceHint = false,
   onOpenChange,
   onConfirm
 }: VoiceTimbrePickerModalProps) {
   /** 从接口加载的音色列表 */
+  const [personalEditorTitle, setPersonalEditorTitle] = useState<string | null>(null)
+  const [source, setSource] = useState<'platform' | 'personal'>('platform')
   const [allVoices, setAllVoices] = useState<VoiceTimbreItem[]>([])
   const [, setLoading] = useState(false)
 
@@ -166,6 +178,13 @@ export function VoiceTimbrePickerModal({
     onOpenChange(false)
   }
 
+  function confirmPersonal(voice: PersonalVoiceAsset) {
+    const id = String(voice.id)
+    onConfirm({ name: voice.assetTitle, avatarUrl: voice.avatarUrl ?? '', id: 'personal:' + id,
+      previewUrl: voice.audioUrl, personalAudioAssetId: id })
+    onOpenChange(false)
+  }
+
   function onAvatarClick(v: VoiceTimbreItem) {
     const a = audioRef.current
     if (!a) return
@@ -193,6 +212,7 @@ export function VoiceTimbrePickerModal({
 
   useEffect(() => {
     if (open) {
+      setSource(allowPersonalVoices && initialVoiceId?.startsWith('personal:') ? 'personal' : 'platform')
       setFilterResetKey((k) => k + 1)
       setFilterName(null)
       setFilterAge(null)
@@ -205,6 +225,7 @@ export function VoiceTimbrePickerModal({
         setSelectedId(found?.id ?? voices[0]?.id ?? null)
       })
     } else {
+      setPersonalEditorTitle(null)
       stopAudio()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -223,12 +244,28 @@ export function VoiceTimbrePickerModal({
   return (
     <AudioPickerModal
       open={open}
-      title="配音角色"
+      title={personalEditorTitle ?? '配音角色'}
+      compact={Boolean(personalEditorTitle)}
       wrapClassName="voice-timbre-picker-wrap"
       className="voice-timbre-picker-modal"
       onCancel={onCancel}
     >
-      <div>
+      {open && allowPersonalVoices && !personalEditorTitle && <HomeSegmented<'platform' | 'personal'>
+        value={source}
+        options={[{ value: 'platform', label: <span>平台音色</span> }, { value: 'personal', label: <span>我的音色</span> }]}
+        onChange={value => { stopAudio(); setSource(value) }}
+        ariaLabel="音色来源"
+        className="voice-picker-source-tabs"
+      />}
+      {open && allowPersonalVoices && source === 'personal' ? (
+        <PersonalVoiceLibrary selectedId={initialVoiceId?.startsWith('personal:') ? initialVoiceId.slice(9) : undefined}
+          onEditorTitleChange={setPersonalEditorTitle} onSelect={confirmPersonal} />
+      ) : <div>
+        {showRoleVoiceHint ? (
+          <p className="voice-picker-role-hint">
+            平台音色用于文本朗读。音画同步中使用本地配音时，以该分镜上传的录音为准。
+          </p>
+        ) : null}
         <div className="voice-picker-filters">
           <Select
             key={`fn-${filterResetKey}`}
@@ -324,7 +361,7 @@ export function VoiceTimbrePickerModal({
             </div>
           ))}
         </div>
-      </div>
+      </div>}
 
       <audio ref={audioRef} className="voice-picker-audio" onEnded={onAudioEnded} onPause={onAudioPause} />
     </AudioPickerModal>

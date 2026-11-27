@@ -134,8 +134,6 @@ public class VoiceLibraryBusinessServiceImpl implements IVoiceLibraryBusinessSer
 
         // 反查模型，同步回填 provider_id；校验专用：仅取 id / provider_id / status / del_flag / capability_json
         AidAiModel model = selectModelForValidation(request.getModelId());
-        // MiniMax 音色只允许通过"同步音色"按钮维护，禁止手动新增
-        rejectIfSyncOnlyProvider(model);
         ensureUniqueVoiceCode(request.getModelId(), request.getVoiceCode(), null);
         // 标签字典命中校验（情感标签按所属模型的供应商声明白名单校验）
         validateTagArrays(request, model);
@@ -180,8 +178,6 @@ public class VoiceLibraryBusinessServiceImpl implements IVoiceLibraryBusinessSer
         }
         validateUpsertFields(request);
         AidAiModel model = selectModelForValidation(request.getModelId());
-        // MiniMax 音色只允许通过"同步音色"按钮维护，禁止手动编辑
-        rejectIfSyncOnlyProvider(model);
         ensureUniqueVoiceCode(request.getModelId(), request.getVoiceCode(), request.getId());
         validateTagArrays(request, model);
 
@@ -604,29 +600,6 @@ public class VoiceLibraryBusinessServiceImpl implements IVoiceLibraryBusinessSer
             throw new ServiceException("模型不可用");
         }
         return model;
-    }
-
-    /**
-     * 拒绝对"仅允许同步维护"的服务商进行手动新增/编辑。
-     * 当前只有 MiniMax 走远程同步（从模型提交路径派生只读音色查询路径），手动新增/编辑会和同步逻辑冲突
-     * （同步会覆盖 name/remark、软删不存在的音色），所以在业务层直接拦截。
-     * 判定条件：模型所属 provider 的 {@code provider_code} equalsIgnoreCase 'minimax'。
-     */
-    private void rejectIfSyncOnlyProvider(AidAiModel model)
-    {
-        if (Objects.isNull(model) || Objects.isNull(model.getProviderId()))
-        {
-            return;
-        }
-        // 查 provider_code
-        com.aid.aid.domain.AidAiProvider provider = aidAiProviderService.getById(model.getProviderId());
-        if (Objects.nonNull(provider) && StrUtil.isNotBlank(provider.getProviderCode())
-                && "minimax".equalsIgnoreCase(provider.getProviderCode().trim()))
-        {
-            log.info("rejectIfSyncOnlyProvider 拒绝手动维护 MiniMax 音色: modelId={}, providerId={}",
-                    model.getId(), model.getProviderId());
-            throw new ServiceException("请使用同步方式");
-        }
     }
 
     /**

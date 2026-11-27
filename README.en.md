@@ -218,7 +218,7 @@ After production deployment, the default URLs are as follows (use the output of 
 | Admin frontend | `http://SERVER_IP:8089/<RANDOM_ACCESS_CODE>` | Port 8089 by default; first deployment generates a 12-character random access code and prints the complete URL |
 | Backend API | `http://SERVER_IP:8080/` | Port 8080 by default; usually accessed through an Nginx reverse proxy |
 
-The database initialization creates the admin account `admin / admin123`. First deployment does not use a publicly known fixed entry path: the installer generates a 12-character random access code. Change the administrator password immediately after the first login. You can regenerate the access code under “Global Business Configuration → Login and Authentication → Admin Login Entry”. `sudo aid default` displays only the initial account information; it does not look up or reset an administrator password that has already been changed.
+The installer generates a random password for the initial `admin` account and prints the location of its root-only password file. Change the password on first login and remove the file. Use `sudo /usr/local/bin/aid default` to show the configured admin entry and site URLs.
 
 With the random admin entry enabled, construct the login URL as follows:
 

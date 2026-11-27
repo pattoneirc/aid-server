@@ -80,11 +80,10 @@ UPDATE `aid_ai_model` m
 INNER JOIN `aid_ai_provider` p ON p.`id`=m.`provider_id` AND p.`provider_code`='minimax'
 SET m.`api_suffix`=CASE m.`protocol`
       WHEN 'minimax-h3-video' THEN '/v2/video_generation'
-      WHEN 'minimax-tts' THEN '/v1/t2a_v2'
       ELSE m.`api_suffix`
     END,
     m.`update_time`=NOW(),m.`update_by`='system'
-WHERE m.`protocol` IN ('minimax-h3-video','minimax-tts')
+WHERE m.`protocol` = 'minimax-h3-video'
   AND NULLIF(TRIM(m.`api_suffix`),'') IS NULL;
 
 UPDATE `aid_ai_model` m

@@ -25,6 +25,8 @@ public class RoleVoiceBindingVO
     /** 音色ID（aid_ai_voice_library.id） */
     private Long voiceLibraryId;
 
+    private Long personalAudioAssetId;
+
     /** 音色编码（调 TTS 用） */
     private String voiceCode;
     /** 音色展示名 */

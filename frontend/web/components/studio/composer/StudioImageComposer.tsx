@@ -43,7 +43,7 @@ export function StudioImageComposer({ node: original }: { node: StudioCanvasNode
     : hasSource || hasComposition
       ? actions.pools.edit
       : actions.pools.storyboard
-  const { node, commit: commitModel } = useCanvasComposerModel(original, composerModels, { enabled: Boolean(canvasRuntime), loading: canvasModels.loading })
+  const { node, commit: commitModel } = useCanvasComposerModel(original, composerModels, { enabled: Boolean(canvasRuntime), loading: canvasModels.loading, preferredModelCode: canvasModels.defaultModelCode })
   const options = node.data.generationOptions ?? {}
   const sceneCode = resolveStudioComposerGenSceneCode(node.data)
   const submitDisabledReason = canvasRuntime && canvasModels.loading

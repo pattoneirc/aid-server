@@ -6,17 +6,19 @@ import { Button, Modal, message } from 'antd'
 import { CloudUploadOutlined, FolderOpenOutlined, PictureOutlined } from '@ant-design/icons'
 import { HomeSegmented } from '@/components/home/theme/HomeSegmented'
 import './studio-library-modals.css'
+import { PersonalVoiceLibrary } from '@/components/steps/PersonalVoiceLibrary'
 import { CaptureVideoFrameModal } from '@/components/steps/CaptureVideoFrameModal'
 import type { StudioCanvasNode, StudioComposerRef, StudioSavedAsset } from '@/types/studio'
 import { createTrackedObjectUrl } from '@/utils/objectUrl'
 import { useCanvasProjectRuntime } from '@/components/studio/free/CanvasProjectRuntimeContext'
 
-type LibraryTab = 'image' | 'audio' | 'video' | 'frame' | 'likeness'
+type LibraryTab = 'image' | 'audio' | 'video' | 'frame' | 'likeness' | 'personalVoice'
 
 const LIBRARY_TAB_ITEMS: Array<{ value: LibraryTab; label: string }> = [
   { value: 'image', label: '图片' },
   { value: 'video', label: '视频' },
   { value: 'audio', label: '音频 / 配音' },
+  { value: 'personalVoice', label: '我的音色' },
   { value: 'frame', label: '截取帧' },
   { value: 'likeness', label: '真人真像' }
 ]
@@ -47,9 +49,9 @@ export function StudioAssetLibraryModal({
   const [captureOpen, setCaptureOpen] = useState(false)
   const [savedOnly, setSavedOnly] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const tabItems = allowedTabs?.length
-    ? LIBRARY_TAB_ITEMS.filter((item) => allowedTabs.includes(item.value))
-    : LIBRARY_TAB_ITEMS
+  const tabItems = LIBRARY_TAB_ITEMS.filter(item => item.value === 'personalVoice'
+    ? Boolean(canvasRuntime) && (!allowedTabs?.length || allowedTabs.includes('audio'))
+    : !allowedTabs?.length || allowedTabs.includes(item.value))
   const tab = tabItems.some((item) => item.value === selectedTab) ? selectedTab : tabItems[0].value
   const mediaKind = tab === 'audio' ? 'audio' : tab === 'video' ? 'video' : 'image'
   const candidates = useMemo(() => {
@@ -125,7 +127,14 @@ export function StudioAssetLibraryModal({
           }}
         />
         <div className="studio-asset-library-modal__content">
-          {tab === 'likeness' && !candidates.length ? (
+          {tab === 'personalVoice' ? (open && <PersonalVoiceLibrary onSelect={voice => addRef({
+            id: 'personal-audio:' + voice.id,
+            kind: 'asset',
+            personalAudioAssetId: String(voice.id),
+            mediaKind: 'audio',
+            title: voice.assetTitle,
+            previewUrl: voice.audioUrl
+          })} />) : tab === 'likeness' && !candidates.length ? (
             <div className="studio-asset-library-modal__empty">上传一张清晰正面照片，作为人物真像参考</div>
           ) : tab === 'frame' ? (
             <div className="studio-asset-library-modal__empty">从画布视频或项目视频中截取画面，作为图片参考</div>
@@ -154,14 +163,14 @@ export function StudioAssetLibraryModal({
             </div>
           ) : <div className="studio-asset-library-modal__empty">当前项目暂无可用素材</div>}
         </div>
-        <footer className="studio-asset-library-modal__actions">
+        {tab !== 'personalVoice' && <footer className="studio-asset-library-modal__actions">
           <Button className={savedOnly ? 'is-active' : ''} icon={<FolderOpenOutlined />} onClick={() => setSavedOnly((value) => !value)}>项目资产 / 历史生成</Button>
           {tab === 'frame' ? (
             <Button icon={<PictureOutlined />} onClick={() => setCaptureOpen(true)}>截取视频帧</Button>
           ) : (
             <Button icon={<CloudUploadOutlined />} onClick={() => fileRef.current?.click()}>本地上传</Button>
           )}
-        </footer>
+        </footer>}
       </Modal>
       <CaptureVideoFrameModal
         open={captureOpen}

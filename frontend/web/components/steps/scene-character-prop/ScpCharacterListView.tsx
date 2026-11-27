@@ -4,8 +4,8 @@ import { flowRowMotionStyle } from '~/utils/v10Motion'
 
 import { FlowActionIcon } from '~/components/common/FlowActionIcon'
 
-import { Button, Input, Tooltip } from 'antd'
-import { LoadingOutlined, PlusOutlined, RightOutlined, UserOutlined } from '@ant-design/icons'
+import { Avatar, Button, Input, Tooltip } from 'antd'
+import { AudioOutlined, LoadingOutlined, PlusOutlined, RightOutlined, UserOutlined } from '@ant-design/icons'
 import { ShimmerImage } from '~/components/common/ShimmerImage'
 import { AssetCardCancelIcon } from '~/components/common/AssetCardCancelIcon'
 import { BillingQuoteConfirm } from '~/components/common/BillingQuoteConfirm'
@@ -113,6 +113,8 @@ export function ScpCharacterListView({ ctx }: { ctx: ScpCtx }) {
                                 className="voiceover-btn"
                                 onClick={() => ctx.openVoiceTimbrePicker(character.index, formIndex)}
                               >
+                                {form.voiceoverId?.startsWith('personal:') && <Avatar size={20}
+                                  src={form.voiceoverAvatarUrl} icon={<AudioOutlined />} />}
                                 {form.voiceover || '无配音'}
                                 <RightOutlined />
                               </Button>

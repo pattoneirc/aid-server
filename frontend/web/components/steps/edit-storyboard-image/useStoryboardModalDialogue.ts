@@ -191,39 +191,14 @@ export function useStoryboardModalDialogue(
     }
 
     const beforeCount = opts.beforeCount
-    let completeHandled = false
-
-    const finalizeDialogueDrawSuccess = async (
-      recordId: number | null | undefined,
-      options?: { skipMessage?: boolean; failCount?: number; successCount?: number }
-    ) => {
-      if (!matchesCreationLiveGenScope(taskScope)) {
-        if (!completeHandled) {
-          completeHandled = true
-          ctx.store().clearStoryboardImageGenTask(storyboardId, taskScope.scopeKey)
-          clearModalImageGenSession(taskSessionScope)
-        }
-        return
-      }
-      if (!completeHandled) {
-        completeHandled = true
-        ctx.clearModalDialogueLoadingUi(storyboardId, sceneIdx, imageIndex)
-        await ctx.refreshSceneRecords(sceneIdx, recordId ?? undefined, beforeCount, { force: true })
-      }
-      if (!opts.silentComplete && !options?.skipMessage) {
-        const successCount = options?.successCount ?? 1
-        const failMsg = options?.failCount ? `，${options.failCount} 张失败` : ''
-        message.success(`对话作图完成，共生成 ${successCount} 张${failMsg}`)
-      }
-    }
 
     const onProgress = (p: {
       successCount?: number
       totalCount?: number
       stepTitle?: string
       message?: string
-      items?: Array<{ recordId?: number; imageId?: number; imageUrl?: string }>
     }) => {
+      if (!matchesCreationLiveGenScope(taskScope)) return
       if (p.successCount != null && p.totalCount != null) {
         ctx.upscaleProgressText.set(`已生成 ${p.successCount}/${p.totalCount} 张...`)
       } else {
@@ -243,13 +218,6 @@ export function useStoryboardModalDialogue(
           },
           taskScope.scopeKey
         )
-      }
-      if (p.items && p.items.length > 0) {
-        const lastRecordId =
-          p.items[p.items.length - 1]?.recordId ?? p.items[p.items.length - 1]?.imageId ?? null
-        void finalizeDialogueDrawSuccess(lastRecordId != null ? Number(lastRecordId) : null, {
-          skipMessage: true
-        })
       }
     }
 
@@ -292,30 +260,26 @@ export function useStoryboardModalDialogue(
         return
       }
 
+      if (!matchesCreationLiveGenScope(taskScope)) {
+        ctx.store().clearStoryboardImageGenTask(storyboardId, taskScope.scopeKey)
+        clearModalImageGenSession(taskSessionScope)
+        return
+      }
+      ctx.clearModalDialogueLoadingUi(storyboardId, sceneIdx, imageIndex)
       if (!result.ok) {
-        /** 剧集隔离：已切集则只清任务所属 scope 桶快照，不写当前集 UI/store、不 toast */
-        if (!matchesCreationLiveGenScope(taskScope)) {
-          ctx.store().clearStoryboardImageGenTask(storyboardId, taskScope.scopeKey)
-          clearModalImageGenSession(taskSessionScope)
-          return
-        }
         if (!opts.silentComplete) {
           message.error(
             'errorMessage' in result ? result.errorMessage || '对话作图失败' : '对话作图失败'
           )
         }
-        ctx.clearModalDialogueLoadingUi(storyboardId, sceneIdx, imageIndex)
         return
       }
 
-      const lastRecordId =
-        result.items[result.items.length - 1]?.recordId ??
-        result.items[result.items.length - 1]?.imageId ??
-        null
-      await finalizeDialogueDrawSuccess(lastRecordId, {
-        failCount: result.failCount,
-        successCount: result.items.length
-      })
+      await ctx.refreshSceneRecordsAfterTask(storyboardId, result, beforeCount)
+      if (!opts.silentComplete && matchesCreationLiveGenScope(taskScope)) {
+        const failMsg = result.failCount ? `，${result.failCount} 张失败` : ''
+        message.success(`对话作图完成，共生成 ${result.items.length} 张${failMsg}`)
+      }
     } finally {
       activeDialogueFollowStoryboardIds.delete(storyboardId)
     }

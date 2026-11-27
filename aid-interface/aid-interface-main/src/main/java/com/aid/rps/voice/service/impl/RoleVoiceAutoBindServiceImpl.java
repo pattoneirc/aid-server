@@ -157,6 +157,7 @@ public class RoleVoiceAutoBindServiceImpl implements IRoleVoiceAutoBindService
         // 让"重新匹配"倾向换一个新音色（仅当无其它候选时才会命中原音色）
         Set<Long> usedVoiceIds = loadEpisodeUsedVoiceIds(role, userId);
         AidRoleVoiceBinding current = findActiveBinding(assetId);
+        if (current != null && current.getPersonalAudioAssetId() != null) return false;
         AidAiVoiceLibrary picked = pickBestVoice(role, pool, usedVoiceIds);
         if (Objects.isNull(picked))
         {
@@ -399,6 +400,7 @@ public class RoleVoiceAutoBindServiceImpl implements IRoleVoiceAutoBindService
     public void upsertBinding(AidRolePropScene role, AidAiVoiceLibrary voice, Long userId)
     {
         AidRoleVoiceBinding existing = findActiveBinding(role.getId());
+        if (existing != null && existing.getPersonalAudioAssetId() != null) return;
         Date now = DateUtils.getNowDate();
         String operator = String.valueOf(userId);
         AidRoleVoiceBinding entity = Objects.nonNull(existing) ? existing : new AidRoleVoiceBinding();

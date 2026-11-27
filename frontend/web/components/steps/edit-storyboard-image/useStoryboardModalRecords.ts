@@ -1,6 +1,9 @@
 'use client'
 
 import { message } from 'antd'
+import { useState } from 'react'
+import { captureCreationLiveGenScope, matchesCreationLiveGenScope } from '~/hooks/useCreationLiveGenScopeGuard'
+import type { ImageResultItem } from '~/hooks/storyboardImageGenerateTaskCore'
 import type { StoryboardRecordRow } from '~/types/business-api'
 import { openImagePreviewModal } from '~/utils/openImagePreviewModal'
 import {
@@ -16,7 +19,15 @@ import { resolveStoryboardRecordDisplayName } from '~/utils/storyboardRecordRow'
 import { resolveStoryScriptSaveContext } from '~/utils/storyScriptSaveContext'
 import type { EditStoryboardImageModalCtx,EditStoryboardImageModalScene } from './types'
 import { STORYBOARD_GENERATED_IMAGE_DEFAULT_TITLE } from './types'
-import { nextTick } from './useMirrored'
+
+type StoryboardTaskImages = {
+  recordId?: number | null
+  recordIds?: number[]
+  imageUrl?: string | null
+  items?: ImageResultItem[]
+}
+
+const RECORD_VISIBILITY_RETRY_DELAYS = [450, 900, 1500]
 
 export interface StoryboardModalRecordsApi {
   currentScene: () => EditStoryboardImageModalScene
@@ -44,6 +55,9 @@ export interface StoryboardModalRecordsApi {
     minCountBefore?: number,
     options?: { force?: boolean }
   ) => Promise<void>
+  refreshSceneRecordsAfterTask: (
+    storyboardId: number, result: StoryboardTaskImages, minCountBefore?: number, fallbackRecordId?: number | null
+  ) => Promise<void>
   currentSceneImages: () => any[]
   currentImg: () => any | null
   showCurrentGeneratingPlaceholder: () => boolean
@@ -60,6 +74,7 @@ export interface StoryboardModalRecordsApi {
 export function useStoryboardModalRecords(
   ctx: EditStoryboardImageModalCtx
 ): StoryboardModalRecordsApi {
+  const [terminalReads] = useState(() => new Map<number, symbol>())
   const currentScene = (): EditStoryboardImageModalScene => {
     return ctx.props().scenes[ctx.currentSceneIndex.get()] || { name: '', images: [] }
   }
@@ -186,12 +201,38 @@ export function useStoryboardModalRecords(
       return (
         String(item?.id ?? item?.url ?? item?.thumbnail ?? '') ===
           String(other?.id ?? other?.url ?? other?.thumbnail ?? '') &&
+        item?.url === other?.url &&
+        item?.thumbnail === other?.thumbnail &&
         !!item?._generating === !!other?._generating &&
         !!item?._localGeneratingPlaceholder === !!other?._localGeneratingPlaceholder &&
         !!item?.isStoryboardImage === !!other?.isStoryboardImage &&
         isStoryboardImageSelected(item) === isStoryboardImageSelected(other)
       )
     })
+  }
+
+  function applyImageRecords(
+    sceneIdx: number, rows: StoryboardRecordRow[], selectRecordId?: number | null, minCountBefore?: number
+  ) {
+    const mapped = ctx.finalizeMappedImagesWhileGenerating(
+      sceneIdx, sortStoryboardImagesForParent(mapRecordRowsToImageItems(rows, sceneIdx))
+    )
+    if (sceneIdx === ctx.currentSceneIndex.get() && ctx.props().open) {
+      const mappedIds = new Set(mapped.map(img => img.id))
+      const pendingUploads = ctx.localSceneImages.get().filter(img => img?._pending && !mappedIds.has(img.id))
+      ctx.localSceneImages.set([...mapped, ...pendingUploads])
+      syncAddedImageIdsFromList(mapped)
+      const selected = mapped.findIndex(img => selectRecordId != null && String(img.id) === String(selectRecordId))
+      if (selected >= 0) ctx.currentImageIndex.set(selected)
+      else if (typeof minCountBefore === 'number' && mapped.length > minCountBefore) {
+        ctx.currentImageIndex.set(mapped.length - 1)
+      } else if (ctx.currentImageIndex.get() >= mapped.length + pendingUploads.length) {
+        ctx.currentImageIndex.set(Math.max(0, mapped.length + pendingUploads.length - 1))
+      }
+    }
+    if (!isSameStoryboardImageRecordList(mapped, ctx.props().scenes[sceneIdx]?.images)) {
+      ctx.emitUpdate(sceneIdx, { images: mapped })
+    }
   }
 
   async function refreshSceneRecords(
@@ -203,37 +244,64 @@ export function useStoryboardModalRecords(
     const raw = ctx.props().scenes[sceneIdx]?.storyboardId
     const id = Number(raw)
     if (!Number.isFinite(id) || id <= 0) return
+    const scope = captureCreationLiveGenScope()
+    const fromTerminal = terminalReads.get(id)
+    const isCurrent = () => matchesCreationLiveGenScope(scope) && terminalReads.get(id) === fromTerminal &&
+      Number(ctx.props().scenes[sceneIdx]?.storyboardId) === id
     try {
       const rows = await fetchImageRecordsForStoryboard(id, { force: options?.force })
-      let mapped = sortStoryboardImagesForParent(mapRecordRowsToImageItems(rows, sceneIdx))
-      mapped = ctx.finalizeMappedImagesWhileGenerating(sceneIdx, mapped)
-      const prevImages = ctx.props().scenes[sceneIdx]?.images
-      if (isSameStoryboardImageRecordList(mapped, prevImages)) {
-        syncAddedImageIdsFromList(mapped)
-        return
-      }
-      // 同步到父组件（右侧列表三弹窗共用：以服务端记录为准）
-      // 仅更新图片列表：弹窗打开/刷新生成记录不应触发保存分镜配置
-      ctx.emitUpdate(sceneIdx, { images: mapped })
-      syncAddedImageIdsFromList(mapped)
-
-      await nextTick()
-
-      if (selectRecordId != null && Number.isFinite(Number(selectRecordId))) {
-        const idx = mapped.findIndex((m) => String(m.id) === String(selectRecordId))
-        if (idx >= 0) {
-          ctx.currentImageIndex.set(idx)
-          return
-        }
-      }
-
-      if (typeof minCountBefore === 'number' && mapped.length > minCountBefore) {
-        ctx.currentImageIndex.set(mapped.length - 1)
-      }
+      if (isCurrent()) applyImageRecords(sceneIdx, rows, selectRecordId, minCountBefore)
     } catch (e: unknown) {
       const err = e as { msg?: string; message?: string }
-      message.warning(err?.msg || err?.message || '获取生成记录失败')
+      if (isCurrent()) message.warning(err?.msg || err?.message || '获取生成记录失败')
     }
+  }
+
+  async function refreshSceneRecordsAfterTask(
+    storyboardId: number, result: StoryboardTaskImages, minCountBefore?: number, fallbackRecordId?: number | null
+  ) {
+    const scope = captureCreationLiveGenScope()
+    const revision = Symbol()
+    terminalReads.set(storyboardId, revision)
+    const isCurrent = () => matchesCreationLiveGenScope(scope) && terminalReads.get(storyboardId) === revision
+    const projectEpisode = await resolveStoryScriptSaveContext(ctx.store(), ctx.route())
+    if (!projectEpisode || !isCurrent()) return
+
+    const items = (result.items ?? []).filter(item => !item.storyboardId || Number(item.storyboardId) === storyboardId)
+    const ids = new Set(
+      [...(result.recordIds ?? []), ...items.map(item => item.recordId ?? item.imageId), result.recordId]
+        .map(Number).filter(id => Number.isFinite(id) && id > 0)
+    )
+    const selectId = [...ids].at(-1) ?? fallbackRecordId
+    const expectedUrl = String(result.imageUrl ?? '').trim()
+    let latestRows: StoryboardRecordRow[] | undefined
+    for (const delay of [0, ...RECORD_VISIBILITY_RETRY_DELAYS]) {
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
+      if (!isCurrent()) return
+      const sceneIdx = ctx.props().scenes.findIndex(scene => Number(scene.storyboardId) === storyboardId)
+      if (sceneIdx < 0) return
+      try {
+        const rows = await fetchStoryboardRecordsForStoryboard(projectEpisode, storyboardId, 'image', { afterWrite: true })
+        if (!isCurrent()) return
+        latestRows = rows
+        const visible = rows.filter(row => !!String(row.fileUrl ?? '').trim())
+        const ready = ids.size ? [...ids].every(id => visible.some(row => Number(row.id) === id))
+          : expectedUrl ? visible.some(row => row.fileUrl === expectedUrl)
+          : minCountBefore == null || visible.length > minCountBefore
+        if (!ready) continue
+        const currentIndex = ctx.props().scenes.findIndex(scene => Number(scene.storyboardId) === storyboardId)
+        if (currentIndex >= 0) applyImageRecords(currentIndex, rows, selectId, minCountBefore)
+        return
+      } catch {
+        // The task is already settled. Retry its record read without submitting another task.
+      }
+    }
+    if (!isCurrent()) return
+    const currentIndex = ctx.props().scenes.findIndex(scene => Number(scene.storyboardId) === storyboardId)
+    if (currentIndex >= 0 && latestRows?.some(row => !!String(row.fileUrl ?? '').trim())) {
+      applyImageRecords(currentIndex, latestRows, selectId, minCountBefore)
+    }
+    if (currentIndex >= 0 && ctx.props().open) message.warning('任务已结束，生成记录尚未全部同步，可重新打开分镜查看')
   }
 
   const currentSceneImages = () => {
@@ -356,6 +424,7 @@ export function useStoryboardModalRecords(
     syncAddedImageIdsFromList,
     isSameStoryboardImageRecordList,
     refreshSceneRecords,
+    refreshSceneRecordsAfterTask,
     currentSceneImages,
     currentImg,
     showCurrentGeneratingPlaceholder,

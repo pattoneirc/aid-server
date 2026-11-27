@@ -8,7 +8,6 @@ import { aidAgentList, canvasUserModelList, canvasUserModelListByFuncCodes, user
 import { userSkillRuntimeCatalog } from '@/utils/business/skill'
 import { canvasQuoteIdentity } from '@/utils/canvas/canvasQuote'
 import { useCanvasGatewayIdentity } from './useCanvasGatewayIdentity'
-import { modelSupportsCapability } from '@/utils/modelCapability'
 
 type CatalogState<T> = { data: T[]; loading: boolean; error: string; defaultModelCode?: string }
 
@@ -44,11 +43,7 @@ function loadModels(mediaKind: StudioMediaKind, generateMode?: string, canvas = 
   if (cached) return Promise.resolve(cached)
   const running = modelInflight.get(key)
   if (running) return running
-  const source = canvas && mediaKind === 'video'
-    ? canvasUserModelListByFuncCodes(['canvas.video.generate']).then(groups =>
-      (groups.find(group => group.funcCode === 'canvas.video.generate')?.models ?? [])
-        .filter(model => !generateMode || modelSupportsCapability(model, generateMode.toLowerCase().replaceAll('-', '_'))))
-    : (canvas ? canvasUserModelList : userModelList)({ modelType: mediaKind, ...(generateMode ? { generateMode } : {}) })
+  const source = (canvas ? canvasUserModelList : userModelList)({ modelType: mediaKind, ...(generateMode ? { generateMode } : {}) })
   const request = source
     .then((items) => {
       if (!canvas || key === modelCatalogKey(mediaKind, generateMode, true)) modelCache.set(key, items)
@@ -156,7 +151,8 @@ export function useStudioModels(
   // 连接完成的首个render也须保持loading，不能把尚未请求的空目录投影成下架。
   const catalog = useCatalog(loader, modelCache.get(key) ?? [], enabled, canvas ? `${key}:${enabled}` : undefined)
   return canvas && options?.enabled !== false && !connected
-    ? { data: [], loading: true, error: '' } : catalog
+    ? { data: [], loading: true, error: '' }
+    : { ...catalog, defaultModelCode: canvas && enabled ? catalog.data[0]?.modelCode : undefined }
 }
 
 /** Canvas business model pool from POST /api/user/model/listByFunc. */

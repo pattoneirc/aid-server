@@ -26,6 +26,10 @@ import {
   mergePromptAssets,
   patchEmptyResolvedPromptAssets
 } from '~/utils/storyboardPromptAssetRef'
+import {
+  validateEdgeVideoPromptPlain,
+  validateImageToVideoPromptPlain
+} from '~/utils/storyboardVideoPromptSave'
 import { buildStoryboardVideoResolutionField } from '~/utils/storyboardVideoGenerateParams'
 import { buildGenerateReferenceAudioFields } from '~/utils/storyboardVideoReferenceAudioWire'
 import { buildGenerateReferenceVideoFields } from '~/utils/storyboardVideoReferenceVideoWire'
@@ -250,8 +254,20 @@ export function VideoConfigPanel({ ctx }: { ctx: VideoModalCtx }) {
   const isPrimaryVideoTab = isImageToVideoTab || isGridVideoTab
 
   const suppressSync = ctx.videoPromptProgrammaticSyncDepth.value > 0
-  const quoteRequest = buildVideoQuoteRequest(ctx)
+  const videoPrompt = (
+    isPrimaryVideoTab ? ctx.imageToVideoPromptPlain()
+      : leftActiveTab === 'multiParam' ? ctx.multiParamPromptPlain()
+        : ctx.edgeVideoPromptPlain()
+  ).trim()
+  const validatePrompt = leftActiveTab === 'startEndFrame'
+    ? validateEdgeVideoPromptPlain : validateImageToVideoPromptPlain
+  const promptValidation = validatePrompt(videoPrompt, ctx.activeVideoPromptMaxLength(videoPrompt))
+  const quoteRequest = promptValidation.ok ? buildVideoQuoteRequest(ctx) : null
   const generationQuote = useBillingQuote(quoteRequest)
+  const generationError = promptValidation.ok
+    ? (quoteRequest ? generationQuote.error : '')
+    : promptValidation.message
+  const generationBlocked = !quoteRequest || !generationQuote.quote || generationQuote.loading || Boolean(generationError)
   const promptQuoteRequest = buildVideoPromptQuoteRequest(ctx)
 
   const primaryModelDropdown = isGridVideoTab ? (
@@ -573,11 +589,19 @@ export function VideoConfigPanel({ ctx }: { ctx: VideoModalCtx }) {
         </div>
         {isPrimaryVideoTab || leftActiveTab === 'multiParam' || leftActiveTab === 'startEndFrame' ? (
           <div className="video-config-footer">
+            {generationError ? (
+              <div className="workflow-quote-error" role="status">
+                {generationError}{' '}
+                {quoteRequest ? (
+                  <button type="button" onClick={generationQuote.refresh}>重新报价</button>
+                ) : null}
+              </div>
+            ) : null}
             <BillingQuoteHint
               quote={generationQuote.quote}
               loading={generationQuote.loading}
-              error={generationQuote.error}
-              active={Boolean(quoteRequest)}
+              active={!generationError}
+              idleText={quoteRequest ? '' : '请先选择生成模型并补齐分镜素材'}
               className="billing-quote-hint--submit"
             />
             {isPrimaryVideoTab ? (
@@ -591,6 +615,7 @@ export function VideoConfigPanel({ ctx }: { ctx: VideoModalCtx }) {
                     : ctx.showImageToVideoGenerateLoadingGet()
                 }
                 disabled={
+                  generationBlocked ||
                   (isGridVideoTab
                     ? ctx.showGridVideoGenerateLoadingGet()
                     : ctx.showImageToVideoGenerateLoadingGet()) ||
@@ -610,7 +635,7 @@ export function VideoConfigPanel({ ctx }: { ctx: VideoModalCtx }) {
                 size="large"
                 className="generate-btn"
                 loading={ctx.showMultiParamGenerateLoadingGet()}
-                disabled={ctx.showMultiParamGenerateLoadingGet()}
+                disabled={generationBlocked || ctx.showMultiParamGenerateLoadingGet()}
                 onClick={() => void ctx.handleMultiParamStartGenerate()}
               >
                 生成视频
@@ -621,7 +646,7 @@ export function VideoConfigPanel({ ctx }: { ctx: VideoModalCtx }) {
                 size="large"
                 className="generate-btn"
                 loading={ctx.showEdgeVideoGenerateLoadingGet()}
-                disabled={ctx.showEdgeVideoGenerateLoadingGet()}
+                disabled={generationBlocked || ctx.showEdgeVideoGenerateLoadingGet()}
                 onClick={() => void ctx.handleEdgeVideoStartGenerate()}
               >
                 生成视频

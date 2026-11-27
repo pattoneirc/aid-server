@@ -5,8 +5,7 @@ import {
   CloseOutlined,
   FileImageOutlined,
   FileTextOutlined,
-  PlayCircleOutlined,
-  SoundOutlined
+  PlayCircleOutlined
 } from '@ant-design/icons'
 import { useStudioUiStore } from '@/stores/studioUi'
 import type { StudioComposerRef, StudioMediaKind } from '@/types/studio'
@@ -15,7 +14,6 @@ import { resolveStudioScriptNodeText } from '@/utils/studio/studioScriptNode'
 import { getStudioComposerPopupContainer } from '@/utils/studio/studioComposerPopupContainer'
 
 function iconFor(mediaKind: StudioMediaKind | undefined) {
-  if (mediaKind === 'audio') return <SoundOutlined />
   if (mediaKind === 'video') return <PlayCircleOutlined />
   if (mediaKind === 'image') return <FileImageOutlined />
   return <FileTextOutlined />
@@ -36,6 +34,7 @@ export function StudioComposerReferenceCard({
   index: number
   onRemove?: (ref: StudioComposerRef) => void
 }) {
+  const audio = mediaKind === 'audio'
   return (
     <span className="studio-composer-reference-card">
       <StudioCanvasPopover
@@ -46,7 +45,7 @@ export function StudioComposerReferenceCard({
         content={(
           <article className="studio-composer-reference-detail studio-canvas-popover-scroll">
             <strong>{title}</strong>
-            <p>{summary || '暂无文本内容'}</p>
+            {summary || !audio ? <p>{summary || '暂无文本内容'}</p> : null}
           </article>
         )}
         classNames={{ root: 'studio-composer-popover studio-composer-popover--canvas' }}
@@ -57,7 +56,12 @@ export function StudioComposerReferenceCard({
           aria-label={`查看引用：${title}`}
         >
           <b>{index}</b>
-          <i aria-hidden>{iconFor(mediaKind)}</i>
+          {audio ? (
+            // The cover is presentation only. The reference keeps its original audio URL.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="studio-composer-reference-card__cover" src="/studio/audio-reference-cover.webp"
+              alt="" width={44} height={44} draggable={false} />
+          ) : <i aria-hidden>{iconFor(mediaKind)}</i>}
         </button>
       </StudioCanvasPopover>
       {onRemove ? (

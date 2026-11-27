@@ -116,16 +116,29 @@ export function invalidateUserAssetRpsFormListCache() {
   rpsFormListInflight.clear()
 }
 
+function invalidateRpsListCache() {
+  rpsListInflight.clear()
+  rpsListBurst.current = null
+}
+
 /** 个人资产主表创建：POST /api/user/asset/rps/create */
 export async function userAssetRpsCreate(body: UserAssetRpsCreateRequest): Promise<UserAssetRpsRow> {
-  const res = await request.post<ApiEnvelope<UserAssetRpsRow>>('/api/user/asset/rps/create', body)
-  return unwrap(res)
+  try {
+    const res = await request.post<ApiEnvelope<UserAssetRpsRow>>('/api/user/asset/rps/create', body)
+    return unwrap(res)
+  } finally {
+    // Refresh after success or a rejected write so callers can see concurrent creations.
+    invalidateRpsListCache()
+  }
 }
 
 /** 个人资产形态创建：POST /api/user/asset/rps/form/create */
 export async function userAssetRpsFormCreate(body: UserAssetRpsFormCreateRequest): Promise<UserAssetRpsRow> {
   const res = await request.post<ApiEnvelope<UserAssetRpsRow>>('/api/user/asset/rps/form/create', body)
-  return unwrap(res)
+  const asset = unwrap(res)
+  invalidateRpsListCache()
+  invalidateUserAssetRpsFormListCache()
+  return asset
 }
 
 /** 个人资产形态图创建：POST /api/user/asset/rps/form-image/create */
@@ -133,6 +146,7 @@ export async function userAssetRpsFormImageCreate(
   body: UserAssetRpsFormImageCreateRequest
 ): Promise<UserAssetRpsFormImageRow> {
   const res = await request.post<ApiEnvelope<UserAssetRpsFormImageRow>>('/api/user/asset/rps/form-image/create', body)
+  invalidateRpsFormImageListCache()
   return unwrap(res)
 }
 
@@ -161,6 +175,11 @@ export async function userAssetRpsFormImageDelete(body: UserAssetRpsFormImageDel
   await request.post<ApiEnvelope<unknown>>('/api/user/asset/rps/form-image/delete', body)
 }
 
+function invalidateRpsFormImageListCache() {
+  rpsFormImageListInflight.clear()
+  rpsFormImageListBurst.current = null
+}
+
 /** 场景形态图拆分四宫格：POST /api/user/asset/rps/form-image/scene/split */
 export async function userAssetRpsFormImageSceneSplit(
   body: UserAssetRpsSceneImageSplitRequest
@@ -171,10 +190,7 @@ export async function userAssetRpsFormImageSceneSplit(
   )
   const data = unwrap(res)
   if (data.summary?.successCount > 0) {
-    // A successful split changes the same form-image list that the editor reads next.
-    // Detach earlier in-flight reads as well as the short burst cache.
-    rpsFormImageListInflight.clear()
-    rpsFormImageListBurst.current = null
+    invalidateRpsFormImageListCache()
   }
   return data
 }
@@ -293,7 +309,8 @@ export async function userAssetRpsAiExtract(body: UserAssetRpsAiExtractRequest):
 /** 角色音色绑定：POST /api/user/asset/rps/voice/bind */
 export async function userRoleVoiceBind(body: {
   assetId: number
-  voiceLibraryId: number
+  voiceLibraryId?: number
+  personalAudioAssetId?: string
   overrideSpeed?: number
   overridePitch?: number
   overrideEmotion?: string

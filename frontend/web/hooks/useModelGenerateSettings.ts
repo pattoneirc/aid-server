@@ -55,40 +55,44 @@ export function useModelGenerateSettings(options: UseModelGenerateSettingsOption
   const parameters = { size: settings.quality.toUpperCase(), expectedImageCount: settings.count, options: { aspectRatio: settings.aspectRatio } }
   const capabilitySnapshot: ModelCapabilitySnapshot = parseModelCapability(selectedRawModel, parameters)
 
-  const aspectRatioSelectOptions = buildAspectRatioSelectOptions(capabilitySnapshot)
+  const normalizedSettings = coerceGenerationSettings(settings, capabilitySnapshot, { include3k })
+  const aspectRatioSelectOptions = buildAspectRatioSelectOptions(capabilitySnapshot, normalizedSettings.quality)
   const countSelectOptions = buildCountSelectOptions(capabilitySnapshot)
   const qualitySelectOptions = buildQualitySelectOptions(capabilitySnapshot, { include3k })
+
+  function resolveGenerationSettings() {
+    const o = optionsRef.current
+    const current = o.getGenerationSettings()
+    const snapshot = parseModelCapability(resolveSelectedRawModel(), { size: current.quality.toUpperCase(), expectedImageCount: current.count, options: { aspectRatio: current.aspectRatio } })
+    return coerceGenerationSettings(current, snapshot, { include3k: o.include3k })
+  }
 
   function syncSettingsToModel() {
     const o = optionsRef.current
     const current = o.getGenerationSettings()
-    const snapshot = parseModelCapability(resolveSelectedRawModel(), { size: current.quality.toUpperCase(), expectedImageCount: current.count, options: { aspectRatio: current.aspectRatio } })
-    o.setGenerationSettings(
-      coerceGenerationSettings(o.getGenerationSettings(), snapshot, { include3k: o.include3k })
-    )
+    const next = resolveGenerationSettings()
+    if (current.aspectRatio !== next.aspectRatio || current.quality !== next.quality || current.count !== next.count) {
+      o.setGenerationSettings(next)
+    }
   }
 
   /** 原 watch(selectedRawModel)：模型切换后按新 capability 收敛设置（非 immediate，首帧跳过） */
   const syncRef = useRef(syncSettingsToModel)
   syncRef.current = syncSettingsToModel
-  const constraintKey = JSON.stringify([selectedRawModel?.id, selectedRawModel?.capabilityCode, capabilitySnapshot])
+  const constraintKey = JSON.stringify([selectedRawModel?.id, selectedRawModel?.capabilityCode, capabilitySnapshot, capabilitySnapshot.aspectRatioFromPixelSize ? settings.quality : null])
   const prevRawModelRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (prevRawModelRef.current === undefined) {
-      prevRawModelRef.current = constraintKey
-      return
-    }
     if (prevRawModelRef.current === constraintKey) return
     prevRawModelRef.current = constraintKey
-    syncRef.current()
-     
-  }, [constraintKey])
+    if (selectedRawModel) syncRef.current()
+  }, [constraintKey, selectedRawModel])
 
   return {
     capabilitySnapshot,
     aspectRatioSelectOptions,
     countSelectOptions,
     qualitySelectOptions,
+    resolveGenerationSettings,
     syncSettingsToModel
   }
 }

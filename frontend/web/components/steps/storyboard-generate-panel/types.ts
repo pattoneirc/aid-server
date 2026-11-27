@@ -178,8 +178,8 @@ export type ResolvedStoryboardGeneratePanelProps = StoryboardGeneratePanelProps 
 /** 原 defineExpose 契约（forwardRef + useImperativeHandle） */
 export interface StoryboardGeneratePanelHandle {
   isParamSettingsOpen: () => boolean
-  applyParamDraftAssets: (type: PanelSelectModalType, items: any[]) => void
+  applyParamDraftAssets: (type: PanelSelectModalType, items: any[], syncPrompt?: boolean) => void
   applyParamDraftReference: (item: any) => void
   applyParamDraftReferences: (items: any[]) => void
-  insertPromptAssetRefsAtCaret: (assets: PromptAssetItem[]) => boolean
+  insertPromptAssetRefsAtCaret: (assets: PromptAssetItem[], focus?: boolean) => boolean
 }

@@ -30,6 +30,13 @@ public class ModelOutboundResourcePreparer
         if (request.getManagedReferenceImages() != null) request.getManagedReferenceImages().forEach((url, reference) ->
                 loaders.put(url, () -> com.aid.media.provider.ImageEditAssetSupport.decodeBinary(
                         managedImages.resolve(request.getUserId(), reference).bytes(), "图片素材")));
+        if (request.getStoredReferenceImages() != null) {
+            var slots = com.aid.media.provider.ImageInputExecutionScope.slots(request).values();
+            for (String locator : request.getStoredReferenceImages()) {
+                if (!slots.contains(locator)) throw new IllegalArgumentException("IMAGE_STORAGE_REFERENCE_INVALID");
+                loaders.putIfAbsent(locator, () -> com.aid.media.provider.ImageEditAssetSupport.readStoredReference(locator));
+            }
+        }
         return loaders;
     }
 

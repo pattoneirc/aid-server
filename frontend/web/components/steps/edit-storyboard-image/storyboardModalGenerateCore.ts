@@ -27,7 +27,10 @@ formatTaskSseLiveText,
 formatTaskSseLiveTextWithCounts
 } from '~/utils/taskSseProgressText'
 import type { EditStoryboardImageModalCtx } from './types'
+import { storyboardImageBindingsFromHtml } from '~/utils/storyboardImageBindings'
+import { invalidateUserStoryboardDetailCache } from '~/utils/storyboardDetailOnce'
 import { buildStoryboardModalGenerateRequest } from './storyboardModalGenerateRequest'
+import { registerStoryboardImageBindings } from './storyboardReferenceImages'
 
 const activeStoryboardImageFollowStoryboardIds = activeStoryboardImageModalGenFollowIds
 
@@ -152,6 +155,7 @@ export function createStoryboardModalGenerateCore(ctx: EditStoryboardImageModalC
       storyboardIds: [ctx.currentStoryboardId()!],
       ...(agentCode ? { agentCode } : {}),
       imagePrompt: promptPlain,
+      imageReferences: storyboardImageBindingsFromHtml(ctx.storyboardPrompt.get()),
       modelName: modelCode,
       aspectRatio,
       size: size || undefined,
@@ -224,41 +228,15 @@ export function createStoryboardModalGenerateCore(ctx: EditStoryboardImageModalC
     ctx.ensureGeneratingPlaceholderImage(sceneIdx)
 
     const beforeCount = opts.beforeCount
-    let completeHandled = false
     let keepPendingUi = false
-
-    const finalizeStoryboardImageGenerateSuccess = async (
-      recordId: number | null | undefined,
-      options?: { skipMessage?: boolean }
-    ) => {
-      if (!matchesCreationLiveGenScope(taskScope)) {
-        if (!completeHandled) {
-          completeHandled = true
-          ctx.store().clearStoryboardImageGenTask(storyboardId, taskScope.scopeKey)
-          clearModalImageGenSession(taskSessionScope)
-        }
-        return
-      }
-      if (!completeHandled) {
-        completeHandled = true
-        ctx.clearModalStoryboardImageLoadingUi(storyboardId, sceneIdx)
-        ctx.storyboardGenerateProgressText.set('同步生成记录…')
-        // SSE 完成后必须绕过打开弹窗时的空/旧 list 缓存，否则会不打 list-by-storyboard、画布空白
-        await ctx.refreshSceneRecords(sceneIdx, recordId ?? undefined, beforeCount, { force: true })
-      }
-      if (!opts.silentComplete && !options?.skipMessage) {
-        message.success('分镜图生成成功')
-      }
-    }
 
     const onProgress = (p: {
       successCount?: number
       totalCount?: number
       stepTitle?: string
       message?: string
-      recordId?: number | null
-      items?: Array<{ recordId?: number; imageUrl?: string; imageId?: number }>
     }) => {
+      if (!matchesCreationLiveGenScope(taskScope)) return
       const live = String(p.message || p.stepTitle || '').trim()
       if (live) {
         ctx.storyboardGenerateProgressText.set(live)
@@ -278,20 +256,6 @@ export function createStoryboardModalGenerateCore(ctx: EditStoryboardImageModalC
         }
       } else if (p.successCount != null && p.totalCount != null) {
         ctx.storyboardGenerateProgressText.set(`已生成 ${p.successCount}/${p.totalCount} 张…`)
-      }
-      if (
-        p.recordId != null ||
-        (p.items && p.items.length > 0) ||
-        (p.stepTitle === '生成完成' && (p.successCount ?? 0) > 0)
-      ) {
-        const rid =
-          p.recordId ??
-          p.items?.[p.items.length - 1]?.recordId ??
-          p.items?.[p.items.length - 1]?.imageId ??
-          null
-        void finalizeStoryboardImageGenerateSuccess(rid != null ? Number(rid) : null, {
-          skipMessage: true
-        })
       }
     }
 
@@ -316,10 +280,23 @@ export function createStoryboardModalGenerateCore(ctx: EditStoryboardImageModalC
           onProgress
         })
       } else if (opts.submitBody) {
+        let body = opts.submitBody
+        if (projectEpisode && body.imageReferences?.some(reference => !reference.imageId && reference.sourceUrl)) {
+          const isCurrent = () => matchesCreationLiveGenScope(taskScope) &&
+            ctx.props().open && ctx.currentStoryboardId() === storyboardId
+          ctx.storyboardGenerateProgressText.set('正在登记参考图…')
+          const imageReferences = await registerStoryboardImageBindings(projectEpisode, body.imageReferences, isCurrent)
+          if (!isCurrent()) {
+            ctx.clearModalStoryboardImageLoadingUi(storyboardId, sceneIdx)
+            return
+          }
+          body = { ...body, imageReferences }
+        }
         result = await runStoryboardImageGenerateTask({
-          body: opts.submitBody,
+          body,
           projectEpisode,
           onSubmitted: ({ taskId }) => {
+            invalidateUserStoryboardDetailCache(storyboardId)
             ctx.store().setStoryboardImageGenTask(
               storyboardId,
               { taskId, sceneIdx, kind: 'storyboard' },
@@ -346,22 +323,22 @@ export function createStoryboardModalGenerateCore(ctx: EditStoryboardImageModalC
         return
       }
 
+      if (!matchesCreationLiveGenScope(taskScope)) {
+        ctx.store().clearStoryboardImageGenTask(storyboardId, taskScope.scopeKey)
+        clearModalImageGenSession(taskSessionScope)
+        return
+      }
+      ctx.clearModalStoryboardImageLoadingUi(storyboardId, sceneIdx)
       if (!result.ok) {
-        /** 剧集隔离：已切集则只清任务所属 scope 桶快照，不写当前集 UI/store、不 toast */
-        if (!matchesCreationLiveGenScope(taskScope)) {
-          ctx.store().clearStoryboardImageGenTask(storyboardId, taskScope.scopeKey)
-          clearModalImageGenSession(taskSessionScope)
-          return
-        }
         if (!opts.silentComplete) {
           message.error('errorMessage' in result ? result.errorMessage || '生图失败' : '生图失败')
         }
-        ctx.clearModalStoryboardImageLoadingUi(storyboardId, sceneIdx)
-        await ctx.refreshSceneRecords(sceneIdx, undefined, undefined, { force: true })
+        await ctx.refreshSceneRecordsAfterTask(storyboardId, {})
         return
       }
 
-      await finalizeStoryboardImageGenerateSuccess(result.recordId)
+      await ctx.refreshSceneRecordsAfterTask(storyboardId, result, beforeCount)
+      if (!opts.silentComplete && matchesCreationLiveGenScope(taskScope)) message.success('分镜图生成成功')
     } catch (e: unknown) {
       if (!matchesCreationLiveGenScope(taskScope)) {
         ctx.store().clearStoryboardImageGenTask(storyboardId, taskScope.scopeKey)
@@ -373,7 +350,7 @@ export function createStoryboardModalGenerateCore(ctx: EditStoryboardImageModalC
         message.error(String(err?.msg || err?.message || '生图失败'))
       }
       ctx.clearModalStoryboardImageLoadingUi(storyboardId, sceneIdx)
-      await ctx.refreshSceneRecords(sceneIdx, undefined, undefined, { force: true })
+      await ctx.refreshSceneRecordsAfterTask(storyboardId, {})
     } finally {
       activeStoryboardImageFollowStoryboardIds.delete(storyboardId)
       if (!keepPendingUi && !activeStoryboardImageFollowStoryboardIds.size) {

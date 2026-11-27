@@ -70,7 +70,8 @@ export function StudioVideoComposer({ node: original }: { node: StudioCanvasNode
       && Boolean(resolveCanvasVideoCapability({ node: original, model, links: videoLinks })))
   const { node, commit: commitModel } = useCanvasComposerModel(original, specialPurpose ? canvasVideoModels.map((item) => modelForCapability(item, specialCapability) ?? item) : canvasVideoModels, {
     enabled: Boolean(canvasRuntime), loading: specialFuncCode ? specialPool.loading : canvasModels.loading,
-    preferredModelCode: specialPool.defaultModelCode, capability: specialPurpose ? specialCapability : undefined
+    preferredModelCode: specialFuncCode ? specialPool.defaultModelCode : canvasModels.defaultModelCode,
+    capability: specialPurpose ? specialCapability : undefined
   })
   const [disclaimerOpen, setDisclaimerOpen] = useState(false)
   const [libraryOpen, setLibraryOpen] = useState(false)
@@ -270,7 +271,7 @@ export function StudioVideoComposer({ node: original }: { node: StudioCanvasNode
               options={canvasRuntime ? canvasVideoModels : undefined}
               optionsLoading={Boolean(canvasRuntime && (specialFuncCode ? specialPool.loading : canvasModels.loading))}
               optionsError={canvasRuntime ? specialFuncCode ? specialPool.error : canvasModels.error : undefined}
-              preferredModelCode={specialFuncCode ? specialPool.defaultModelCode : undefined}
+              preferredModelCode={specialFuncCode ? specialPool.defaultModelCode : canvasModels.defaultModelCode}
               selectedModelMeta={{ modelName: node.data.modelName, isFree: node.data.modelIsFree, costCredits: node.data.modelCostCredits }}
               syncDefaults={!canvasRuntime}
               preserveInvalidSelection={Boolean(canvasRuntime)}

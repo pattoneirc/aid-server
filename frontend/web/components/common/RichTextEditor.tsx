@@ -119,7 +119,7 @@ export interface RichTextEditorHandle {
   getHtml: () => string
   getPlainPrompt: () => string
   insertPromptAssetRef: (item: PromptAssetItem) => void
-  insertPromptAssetRefs: (items: PromptAssetItem[]) => void
+  insertPromptAssetRefs: (items: PromptAssetItem[], focus?: boolean) => boolean
   upsertPromptAssetRef: (item: PromptAssetItem) => void
   removePromptAssetRef: (assetId: string) => void
   removePromptAssetRefByMatch: (hint: {
@@ -764,9 +764,9 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       applyPromptAssetRefChanges({ upsert: [item] })
     }
 
-    function insertPromptAssetRefs(items: PromptAssetItem[]) {
+    function insertPromptAssetRefs(items: PromptAssetItem[], focus = true) {
       const quill = quillRef.current
-      if (!quill || !propsRef.current.enablePromptAssetRefs || !items.length) return
+      if (!quill || !propsRef.current.enablePromptAssetRefs || !items.length) return false
       const before = getEmittedHtml(quill)
       commitControlledEditorMutation(
         syncingFromPropRef,
@@ -785,7 +785,8 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
           if (after !== before) emitModelValue(after)
         }
       )
-      restoreEditorSelection(lastSelectionRef.current, { focus: true, scrollIntoView: false })
+      if (focus) restoreEditorSelection(lastSelectionRef.current, { focus: true, scrollIntoView: false })
+      return true
     }
 
     function insertPromptAssetRef(item: PromptAssetItem) {

@@ -48,6 +48,7 @@ export interface ScpCharacterCrudApi {
     id: string
     previewUrl: string
     voiceLibraryId?: number
+    personalAudioAssetId?: string
   }) => Promise<void>
   toggleVoicePreview: (characterIndex: number, formIndex: number) => Promise<void>
   handleVoicePreviewEnded: () => void
@@ -339,6 +340,7 @@ export function useScpCharacterCrud(ctx: ScpCtx): ScpCharacterCrudApi {
     id: string
     previewUrl: string
     voiceLibraryId?: number
+    personalAudioAssetId?: string
   }) => {
     const characterIndex = ctx.currentVoiceCharacterIndex.get()
     const formIndex = ctx.currentVoiceFormIndex.get()
@@ -348,6 +350,7 @@ export function useScpCharacterCrud(ctx: ScpCtx): ScpCharacterCrudApi {
 
     const localVoiceFields = roleVoiceBindingToFormFields({
       voiceLibraryId: payload.voiceLibraryId ?? Number(payload.id),
+      personalAudioAssetId: payload.personalAudioAssetId,
       voiceName: payload.name,
       avatarUrl: payload.avatarUrl,
       sampleUrl: payload.previewUrl
@@ -357,6 +360,10 @@ export function useScpCharacterCrud(ctx: ScpCtx): ScpCharacterCrudApi {
     const assetId = ctx.characterAssetIds.get()[characterIndex]
     const voiceLibraryId = payload.voiceLibraryId ?? Number(payload.id)
     if (assetId == null || !Number.isFinite(Number(assetId))) {
+      if (payload.personalAudioAssetId) {
+        message.warning('请先保存角色，再绑定个人音色')
+        return
+      }
       applyVoiceFieldsToCharacterForms(forms, localVoiceFields)
       // 原地写入 forms 后强制触发渲染（Vue 深响应式的 React 等价）
       ctx.characterForms.set({ ...ctx.characterForms.get() })
@@ -364,7 +371,7 @@ export function useScpCharacterCrud(ctx: ScpCtx): ScpCharacterCrudApi {
       message.warning('角色尚未同步到服务端，刷新后配音可能无法保留')
       return
     }
-    if (!Number.isFinite(voiceLibraryId) || voiceLibraryId <= 0) {
+    if (!payload.personalAudioAssetId && (!Number.isFinite(voiceLibraryId) || voiceLibraryId <= 0)) {
       message.error('音色 ID 无效')
       return
     }
@@ -372,7 +379,9 @@ export function useScpCharacterCrud(ctx: ScpCtx): ScpCharacterCrudApi {
     try {
       const binding = await userRoleVoiceBind({
         assetId: Number(assetId),
-        voiceLibraryId: Number(voiceLibraryId)
+        ...(payload.personalAudioAssetId
+          ? { personalAudioAssetId: payload.personalAudioAssetId }
+          : { voiceLibraryId })
       })
       const voiceFields = roleVoiceBindingToFormFields(binding)
       applyVoiceFieldsToCharacterForms(forms, voiceFields)
@@ -388,10 +397,7 @@ export function useScpCharacterCrud(ctx: ScpCtx): ScpCharacterCrudApi {
   const toggleVoicePreview = async (characterIndex: number, formIndex: number) => {
     const form = ctx.characterForms.get()[characterIndex]?.[formIndex]
     if (!form?.voiceover) return
-    const previewUrl = String(
-      form.voiceoverPreviewUrl ||
-        'https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3'
-    ).trim()
+    const previewUrl = String(form.voiceoverPreviewUrl || '').trim()
     if (!previewUrl) {
       message.warning('该配音暂无试听音频')
       return

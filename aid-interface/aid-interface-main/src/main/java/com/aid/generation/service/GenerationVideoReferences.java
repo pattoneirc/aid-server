@@ -4,6 +4,7 @@ import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.util.StrUtil;
 import com.aid.common.core.domain.ApiErrorDetails;
 import com.aid.common.exception.ServiceException;
+import com.aid.common.aid.oss.util.MediaUrlResolver;
 import com.aid.generation.service.GenerationResourceResolver.ResolvedResource;
 import com.aid.media.dto.MediaVideoGenerateRequest;
 import com.aid.media.dto.ReferenceAudioInput;
@@ -19,7 +20,7 @@ import java.util.Map;
 public final class GenerationVideoReferences {
     private GenerationVideoReferences() { }
     public static void apply(MediaVideoGenerateRequest mediaRequest, List<ResolvedResource> resources,
-                             Map<String, Object> options) {
+                             Map<String, Object> options, MediaUrlResolver mediaUrlResolver) {
         for (ResolvedResource resource : resources) {
             if ("DOCUMENT".equals(resource.mediaType())) throw new ServiceException("视频生成不支持文档素材");
             if ("FIRST_FRAME".equals(resource.role())) {
@@ -58,7 +59,7 @@ public final class GenerationVideoReferences {
             audio.setName(resource.mention());
             audio.setSourceType(ReferenceAudioInput.SOURCE_UPLOAD);
             audio.setReferenceAudioId(resource.resourceId());
-            audio.setSampleUrl(resource.url());
+            audio.setSampleUrl(mediaUrlResolver.toFullUrl(resource.url()));
             applyAudioMetadata(audio, resource.metadataJson());
             if (StrUtil.isBlank(audio.getFormat()) || audio.getDurationMs() == null) {
                 missingAudioMetadata.add(resource.resourceId().toString());

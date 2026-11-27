@@ -40,6 +40,11 @@ public class AudioAssetVO {
     @MediaUrl
     private String audioUrl;
 
+    private Integer durationMs;
+
+    @MediaUrl
+    private String avatarUrl;
+
     /** 文件大小（字节） */
     private Long fileSize;
 

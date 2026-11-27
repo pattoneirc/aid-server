@@ -305,6 +305,8 @@ public class TokenDanceCatalogManager {
         LinkedHashMap<String, JsonNode> entries = new LinkedHashMap<>();
         for (JsonNode model : costRoot.path("models")) {
             String modelId = requiredText(model, "modelId");
+            // Cached and published catalog snapshots can still contain retired models.
+            if (modelId.equals("minimax-speech-2.8-hd") || modelId.equals("minimax-speech-2.8-turbo")) continue;
             if (entries.putIfAbsent(modelId, model) != null) throw new IllegalStateException("目录模型重复");
         }
         TokenDanceCapabilityTemplateRegistry registry =

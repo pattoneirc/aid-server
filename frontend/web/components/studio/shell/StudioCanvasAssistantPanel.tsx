@@ -5,10 +5,9 @@ import { ASSISTANT_HISTORY_MORE_KEY, studioAssistantHistoryItems } from '@/compo
 import { StudioIconGlyph } from '@/components/studio/theme/StudioIconGlyph'
 
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
-import { Button, Modal, message } from 'antd'
+import { Button, message } from 'antd'
 import { ArrowLeftOutlined, CloseOutlined, SettingOutlined } from '@ant-design/icons'
-import { StudioCanvasAssistantSettings, StudioCanvasBudgetDefaults } from './StudioCanvasAssistantSettings'
-import { StudioWorkspaceModalProvider } from './StudioWorkspaceModalProvider'
+import { StudioCanvasAssistantSettingsDialog } from './StudioCanvasAssistantSettings'
 import { StudioCanvasConversationPanel } from './StudioCanvasConversationPanel'
 import { canvasConversationList } from '@/utils/business/canvasConversation'
 import AgentConversationPanel from '@/components/common/agent-conversation/AgentConversationPanel'
@@ -470,15 +469,9 @@ export function StudioCanvasAssistantPanel(props: StudioFreeAgentPanelRenderProp
               <Button type="link" onClick={openSettings}>调整生成预算</Button>
             </div> : null}
           </AgentConversationPanel>
-          <StudioWorkspaceModalProvider rootClassName="create-flow-modal">
-            <Modal title="画布助手设置" open={settingsOpen} onCancel={() => setSettingsScope(undefined)} footer={null} width={520} destroyOnHidden>
-              {view.snapshot?.activeRun ? <StudioCanvasAssistantSettings key={view.snapshot.sessionId} snapshot={view.snapshot} store={view.store} busy={view.mutationBlocked} /> : null}
-              {budgetKey ? view.snapshot?.activeRun && !['SUCCEEDED', 'COMPLETED', 'FAILED', 'STOPPED', 'CANCELLED'].includes(view.snapshot.activeRun.status)
-                ? <details><summary>设置后续运行的预算</summary><StudioCanvasBudgetDefaults key={budgetKey} budget={canvasBudget} onSave={saveCanvasBudget} /></details>
-                : <StudioCanvasBudgetDefaults key={budgetKey} budget={canvasBudget} onSave={saveCanvasBudget} />
-                : <p role="status">连接画布后可设置预算。</p>}
-            </Modal>
-          </StudioWorkspaceModalProvider></>
+          <StudioCanvasAssistantSettingsDialog open={settingsOpen} onClose={() => setSettingsScope(undefined)}
+            snapshot={view.snapshot} store={view.store} busy={view.mutationBlocked}
+            budgetKey={budgetKey} budget={canvasBudget} onSave={saveCanvasBudget} /></>
         }}
         renderDisabledHint={(control, reason) => reason ? <StudioCanvasTooltip title={reason}>{control}</StudioCanvasTooltip> : control}
         prepareExistingContextRefresh={() => runtime ? prepareCanvasAssistantContextRefresh(runtime, scopeKey) : Promise.reject(new Error('画布尚未就绪'))}

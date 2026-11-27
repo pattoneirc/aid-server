@@ -40,10 +40,10 @@ function previewPosition(rect: DOMRect): { top: number; left: number } {
   }
 }
 
-function previewCover(item: CanvasSkillItem): { background: string } {
+function previewCover(item: CanvasSkillItem) {
   let hash = 0
   for (const char of item.code || item.name) hash = (hash * 33 + char.charCodeAt(0)) % 360
-  return { background: `linear-gradient(145deg, hsl(${hash} 42% 42%), hsl(${(hash + 36) % 360} 36% 24%))` }
+  return { ['--skill-hue' as string]: String(hash) }
 }
 
 const skillGlyphUrl = assetUrl(lightningIconRaw)

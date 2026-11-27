@@ -29,6 +29,7 @@ type Runner struct {
 	activeTaskID     string
 	cancellationOpen bool
 	activeTaskCancel context.CancelFunc
+	lastRecoveryScan time.Time
 }
 
 var errTaskCancelled = errors.New("升级已由管理员取消")
@@ -55,6 +56,12 @@ func (r *Runner) reportProgress(t *Task, progress int, phase, message string) {
 
 // RecoverInterrupted 启动时优先恢复中断任务的文件与数据库，再清理认领文件。
 func (r *Runner) RecoverInterrupted() {
+	release, err := r.lockDeployment()
+	if err != nil {
+		log.Printf("暂缓恢复检查: %v", err)
+		return
+	}
+	defer release()
 	recoveryPattern := filepath.Join(r.cfg.WorkDir, "recovery-*.json")
 	recoveryFiles, _ := filepath.Glob(recoveryPattern)
 	for _, path := range recoveryFiles {
@@ -64,38 +71,39 @@ func (r *Runner) RecoverInterrupted() {
 			continue
 		}
 		if record.Completed {
+			if len(record.Snapshot.Digests) > 0 {
+				if err := r.finishVersionChange(&record.Task, path, record.Snapshot); err != nil {
+					log.Printf("继续备份轮换失败: %v", err)
+				}
+				continue
+			}
 			if err := os.Remove(path); err != nil {
 				log.Printf("清理已完成任务的恢复记录失败: %v", err)
 			}
 			continue
 		}
-		log.Printf("恢复中断任务 %s(%s)", record.Task.TaskID, record.Task.Action)
-		var restoreErr error
-		if record.DatabaseDirty {
-			if stopErr := sysctl.StopService(r.cfg.Install.ServiceManager, r.cfg.Install.BackendService); stopErr != nil {
-				log.Printf("恢复中断任务前停止服务失败，继续尝试恢复: %v", stopErr)
+		if record.Preparing {
+			if err := r.finishInterruptedPreparation(path, record.Task.TaskID); err != nil {
+				log.Printf("恢复备份阶段中断失败: %v", err)
 			}
-			restoreErr = backup.RestoreDatabase(r.cfg, record.Snapshot)
+			continue
 		}
-		if restoreErr == nil {
-			restoreErr = backup.Restore(r.cfg, record.Snapshot)
-		}
-		if restoreErr == nil {
-			restoreErr = startBackend(r.cfg)
-		}
+		log.Printf("恢复中断任务 %s(%s)", record.Task.TaskID, record.Task.Action)
+		restoreErr := r.restoreVersion(record.Snapshot, record.DatabaseDirty)
 		if restoreErr != nil {
 			log.Printf("中断任务恢复失败，保留恢复记录等待人工处理: %v", restoreErr)
 			r.reporter.SetTask(record.Task.TaskID, record.Task.Action, health.TaskStateFailed,
 				trimMessage("升级中断且自动恢复失败: "+restoreErr.Error()))
 			continue
 		}
-		if err := restartAuxServices(r.cfg); err != nil {
-			log.Printf("中断恢复后重启附属服务失败: %v", err)
-		}
 		r.reporter.SetTask(record.Task.TaskID, record.Task.Action, health.TaskStateFailed,
 			"升级器中断，已自动恢复原版本")
 		if err := os.Remove(path); err != nil {
 			log.Printf("清理恢复记录失败: %v", err)
+		} else if record.CreatedSnapshot {
+			if err := backup.Discard(r.cfg.BackupDir, record.Snapshot); err != nil {
+				log.Printf("清理中断任务创建的备份失败: %v", err)
+			}
 		}
 	}
 
@@ -106,11 +114,23 @@ func (r *Runner) RecoverInterrupted() {
 		matches = nil
 	}
 	for _, path := range matches {
-		if t, parseErr := Parse(path); parseErr == nil {
-			log.Printf("发现中断任务 %s(%s)，标记为失败", t.TaskID, t.Action)
-			r.reporter.SetTask(t.TaskID, t.Action, health.TaskStateFailed,
-				"任务因升级器中断未完成，请确认系统状态后重新发起")
+		t, err := Parse(path)
+		if err != nil {
+			log.Printf("读取中断任务认领记录失败，保留待检查: %s: %v", path, err)
+			continue
 		}
+		if filepath.Base(path) != "claimed-"+t.TaskID+".json" {
+			log.Printf("认领记录与任务编号不一致，保留待检查: %s", path)
+			continue
+		}
+		log.Printf("发现中断任务 %s(%s)，标记为失败", t.TaskID, t.Action)
+		if err := r.cleanupVersionTaskWork(t); err != nil {
+			log.Printf("清理中断任务产物失败，保留认领记录以便下次恢复: %v", err)
+			r.reporter.SetTask(t.TaskID, t.Action, health.TaskStateFailed, trimMessage(err.Error()))
+			continue
+		}
+		r.reporter.SetTask(t.TaskID, t.Action, health.TaskStateFailed,
+			"任务因升级器中断未完成，请确认系统状态后重新发起")
 		if err := os.Remove(path); err != nil {
 			log.Printf("清理中断任务文件失败: %v", err)
 		}
@@ -122,8 +142,31 @@ func (r *Runner) RecoverInterrupted() {
 	}
 }
 
+func (r *Runner) finishInterruptedPreparation(path, taskID string) error {
+	if err := startBackend(r.cfg); err != nil {
+		return err
+	}
+	if err := sysctl.WaitHealthy(r.cfg.Install.HealthCheckURL, time.Duration(r.cfg.Install.HealthCheckTimeoutSeconds)*time.Second); err != nil {
+		return err
+	}
+	if err := backup.DiscardIncomplete(r.cfg.BackupDir, taskID); err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
 // PollOnce 检查任务文件，存在则认领并执行；返回是否执行了任务。
 func (r *Runner) PollOnce() bool {
+	if time.Since(r.lastRecoveryScan) >= 15*time.Second {
+		r.lastRecoveryScan = time.Now()
+		if claims, _ := filepath.Glob(filepath.Join(r.cfg.WorkDir, "claimed-cli-*.json")); len(claims) != 0 {
+			r.RecoverInterrupted()
+		}
+	}
+	if pending, _ := filepath.Glob(filepath.Join(r.cfg.WorkDir, "recovery-*.json")); len(pending) != 0 {
+		log.Printf("存在待处理的版本恢复记录，暂停接收任务: %s", pending[0])
+		return false
+	}
 	if err := r.recoverNginx(); err != nil {
 		log.Printf("Nginx中断恢复失败，暂停接收任务: %v", err)
 		return false
@@ -158,10 +201,18 @@ func (r *Runner) PollOnce() bool {
 
 	var runErr error
 	switch t.Action {
-	case ActionUpgrade:
-		runErr = r.runCancellableApply(t, false)
-	case ActionRollback:
-		runErr = r.runCancellableApply(t, true)
+	case ActionUpgrade, ActionRollback, ActionBackupSettings:
+		release, err := r.lockDeployment()
+		if err != nil {
+			runErr = err
+			break
+		}
+		defer release()
+		if t.Action == ActionBackupSettings {
+			runErr = r.configureBackups(t)
+		} else {
+			runErr = r.runCancellableApply(t, t.Action == ActionRollback)
+		}
 	case ActionUpdaterUpgrade:
 		runErr = r.runSelfUpgrade(t)
 	case ActionConfigValidate:
@@ -197,6 +248,8 @@ func (r *Runner) PollOnce() bool {
 	log.Printf("任务 %s 执行成功", t.TaskID)
 	message := fmt.Sprintf("已完成 %s -> %s", t.SourceVersion, t.TargetVersion)
 	switch t.Action {
+	case ActionBackupSettings:
+		message = "备份路径和保留份数已验证并保存"
 	case ActionConfigValidate:
 		message = "配置校验通过"
 	case ActionConfigApply:
@@ -354,39 +407,53 @@ func contextCancellationError(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// cleanupWork 清理本次任务的下载与解压产物。
-func (r *Runner) cleanupWork(paths ...string) {
-	for _, p := range paths {
-		if p == "" {
-			continue
+func (r *Runner) cleanupVersionTaskWork(t *Task) error {
+	if !taskIDPattern.MatchString(t.TaskID) {
+		return fmt.Errorf("无法安全清理任务产物，任务 ID 格式错误")
+	}
+	switch t.Action {
+	case ActionUpgrade, ActionRollback:
+		files := []string{"pkg-" + t.TaskID + ".tar.gz", "pkg-" + t.TaskID + ".tar.gz.part",
+			"pkg-" + t.TaskID + ".tar.gz.part.sha256", "extract-" + t.TaskID, "source-" + t.TaskID,
+			"source-builder-" + t.TaskID + ".sh", "source-builder-" + t.TaskID + ".sh.part"}
+		if strings.HasPrefix(t.TaskID, "cli-") {
+			files = append(files, t.TaskID+".json")
 		}
-		if err := os.RemoveAll(p); err != nil {
-			log.Printf("清理工作产物失败 %s: %v", p, err)
+		return cleanupWork(r.cfg.WorkDir, files...)
+	case ActionUpdaterUpgrade:
+		return cleanupWork(r.cfg.WorkDir, "updater-"+t.TaskID+".tar.gz", "updater-"+t.TaskID+".tar.gz.part",
+			"updater-extract-"+t.TaskID)
+	default:
+		return nil
+	}
+}
+
+func cleanupWork(root string, names ...string) error {
+	if _, err := os.Lstat(root); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("检查升级器工作目录失败: %w", err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil || resolvedRoot != filepath.Clean(root) {
+		return fmt.Errorf("升级器工作目录不是实际路径: %s", root)
+	}
+	var cleanupErr error
+	for _, name := range names {
+		path := filepath.Join(root, name)
+		if err := os.RemoveAll(path); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("清理工作产物失败 %s: %w", path, err))
 		}
 	}
+	return cleanupErr
 }
 
 // restoreAndReport 升级失败后还原备份并重启服务，返回给用户的失败说明。
 func (r *Runner) restoreAndReport(t *Task, s *backup.Snapshot, cause error, recoveryPath string, databaseDirty bool) error {
 	log.Printf("开始回滚: 原因=%v", cause)
 	r.reportProgress(t, 95, "自动恢复", "升级失败，正在恢复升级前版本")
-	if databaseDirty {
-		if stopErr := sysctl.StopService(r.cfg.Install.ServiceManager, r.cfg.Install.BackendService); stopErr != nil {
-			return fmt.Errorf("升级失败(%v)，恢复数据库前停止服务失败(%v)，请人工介入，备份目录: %s", cause, stopErr, s.Dir)
-		}
-		if dbRestoreErr := backup.RestoreDatabase(r.cfg, s); dbRestoreErr != nil {
-			return fmt.Errorf("升级失败(%v)，且数据库还原失败(%v)，请人工介入，备份目录: %s", cause, dbRestoreErr, s.Dir)
-		}
-	}
-	if restoreErr := backup.Restore(r.cfg, s); restoreErr != nil {
-		return fmt.Errorf("升级失败(%v)，且备份还原失败(%v)，请人工介入，备份目录: %s", cause, restoreErr, s.Dir)
-	}
-	if startErr := startBackend(r.cfg); startErr != nil {
-		return fmt.Errorf("升级失败(%v)，已还原备份但服务启动失败(%v)，请人工检查", cause, startErr)
-	}
-	// 前端静态产物已还原为旧版本，Docker 静态 Web 容器 / nginx 同样需要重启生效
-	if err := restartAuxServices(r.cfg); err != nil {
-		log.Printf("自动回滚后重启附属服务失败: %v", err)
+	if err := r.restoreVersion(s, databaseDirty); err != nil {
+		return fmt.Errorf("版本切换失败(%v)，自动恢复失败(%v)，保护备份: %s", cause, err, s.Dir)
 	}
 	if recoveryPath != "" {
 		if err := os.Remove(recoveryPath); err != nil && !os.IsNotExist(err) {
@@ -396,6 +463,26 @@ func (r *Runner) restoreAndReport(t *Task, s *backup.Snapshot, cause error, reco
 	return fmt.Errorf("升级失败已自动回滚到原版本(%v)", cause)
 }
 
+func (r *Runner) restoreVersion(s *backup.Snapshot, databaseDirty bool) error {
+	if err := sysctl.StopService(r.cfg.Install.ServiceManager, r.cfg.Install.BackendService); err != nil {
+		return err
+	}
+	if databaseDirty {
+		if err := backup.RestoreDatabase(r.cfg, s); err != nil {
+			return err
+		}
+	}
+	if err := backup.Restore(r.cfg, s); err != nil {
+		return err
+	}
+	if err := startBackend(r.cfg); err != nil {
+		return err
+	}
+	if err := sysctl.WaitHealthy(r.cfg.Install.HealthCheckURL, time.Duration(r.cfg.Install.HealthCheckTimeoutSeconds)*time.Second); err != nil {
+		return err
+	}
+	return restartAuxServices(r.cfg)
+}
 func trimMessage(message string) string {
 	const maxLen = 500
 	message = strings.TrimSpace(message)

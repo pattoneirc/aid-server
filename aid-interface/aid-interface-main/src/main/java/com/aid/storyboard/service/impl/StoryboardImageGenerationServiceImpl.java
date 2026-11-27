@@ -35,11 +35,13 @@ import com.aid.agent.IAidAgentService;
 import com.aid.aid.domain.AidAgent;
 import com.aid.aid.domain.AidExtractTask;
 import com.aid.aid.domain.AidGenRecord;
+import com.aid.aid.domain.AidComicProject;
 import com.aid.aid.domain.AidStoryboard;
 import com.aid.aid.domain.media.AidMediaTask;
 import com.aid.aid.mapper.AidMediaTaskMapper;
 import com.aid.aid.service.IAidExtractTaskService;
 import com.aid.aid.service.IAidGenRecordService;
+import com.aid.aid.service.IAidComicProjectService;
 import com.aid.aid.service.IAidStoryboardService;
 import com.aid.common.core.redis.RedisCache;
 import com.aid.common.error.ErrorNormalizer;
@@ -65,6 +67,9 @@ import com.aid.model.vo.AiModelVO;
 import com.aid.notify.wechat.service.IWechatNotifyService;
 import com.aid.rps.queue.MediaGenFanInSupport;
 import com.aid.rps.resolver.StoryboardImageReferenceResolver;
+import com.aid.storyboard.dto.StoryboardImageReference;
+import com.aid.storyboard.support.StoryboardImageBindings;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.aid.rps.service.IAssetExtractService;
 import com.aid.rps.queue.BatchTaskLogicalType;
 import com.aid.rps.queue.BatchTaskSlotReservation;
@@ -206,6 +211,9 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
     private IAidStoryboardService aidStoryboardService;
 
     @Autowired
+    private IAidComicProjectService aidComicProjectService;
+
+    @Autowired
     private IAidAgentService aidAgentService;
 
     @Autowired
@@ -226,6 +234,12 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
 
     @Autowired
     private StoryboardImageReferenceResolver storyboardImageReferenceResolver;
+
+    @Autowired
+    private StoryboardImageBindings storyboardImageBindings;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
 
     /** 引用即启用：生图前把"已存在但未启用"的被引用资产自动设为 is_use=1 */
     @Autowired
@@ -295,13 +309,14 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
 
         AidAgent agent = loadAndAssertAgent(effectiveAgentCode);
         AiModelConfigVo modelConfig = resolveModelConfig(request.getModelName(), agent,
-                resolveImageCapability(ids, single ? request.getImagePrompt() : null, userId));
+                single && CollectionUtil.isNotEmpty(request.getImageReferences()) ? "image_to_image"
+                        : resolveImageCapability(ids, single ? request.getImagePrompt() : null, userId));
         String modelCode = modelConfig.getModelCode();
         Long modelId = modelConfig.getId();
 
         // 档位/比例统一按模型 capability 白名单解析：传值未命中直接拦截，未传值回退模型默认档，
         // 并消解「显式像素档位」与「比例」的互斥，避免兜底档位挤掉用户选的比例
-        ModelCapabilityResolver.ImageSizeSpec sizeSpec = resolveImageSizeSpec(modelConfig, request);
+        ModelCapabilityResolver.ImageSizeSpec sizeSpec = resolveImageSizeSpec(modelConfig, request, ids, userId);
         String resolvedSize = sizeSpec.size();
         String resolvedAspectRatio = sizeSpec.aspectRatio();
 
@@ -314,7 +329,7 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
                 request.getNegativePrompt(), request.getUserInputText(),
                 slotReservation,
                 sb -> prepareShot(sb, singleFinal, request.getImagePrompt(), request.getUserInputText(),
-                        userId, perShotCountFinal, modelConfig, true));
+                        userId, perShotCountFinal, modelConfig, true, request.getImageReferences()));
     }
 
     @Override
@@ -338,8 +353,9 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
         int perShotCount = single ? clampCount(request.getCount()) : 1;
         AidAgent agent = loadAndAssertAgent(StrUtil.blankToDefault(request.getAgentCode(), DEFAULT_AGENT_CODE));
         AiModelConfigVo modelConfig = resolveModelConfig(request.getModelName(), agent,
-                resolveImageCapability(ids, single ? request.getImagePrompt() : null, userId));
-        ModelCapabilityResolver.ImageSizeSpec sizeSpec = resolveImageSizeSpec(modelConfig, request);
+                single && CollectionUtil.isNotEmpty(request.getImageReferences()) ? "image_to_image"
+                        : resolveImageCapability(ids, single ? request.getImagePrompt() : null, userId));
+        ModelCapabilityResolver.ImageSizeSpec sizeSpec = resolveImageSizeSpec(modelConfig, request, ids, userId);
 
         List<BillingQuoteVO> items = new ArrayList<>();
         for (Long id : ids)
@@ -347,7 +363,7 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
             AidStoryboard storyboard = loadAndCheckStoryboard(id, userId);
             PreparedShot shot = plannedPrompt ? null : prepareShot(
                     storyboard, single, request.getImagePrompt(), request.getUserInputText(),
-                    userId, perShotCount, modelConfig, false);
+                    userId, perShotCount, modelConfig, false, request.getImageReferences());
             MediaImageGenerateRequest media = buildImageMediaRequest(
                     storyboard, plannedPrompt ? null : shot.finalPrompt,
                     plannedPrompt ? List.of() : shot.referenceImages,
@@ -417,11 +433,34 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
     }
 
     private ModelCapabilityResolver.ImageSizeSpec resolveImageSizeSpec(
-            AiModelConfigVo model, StoryboardImageGenerateRequest request) {
-        // TokenDance 在协议层把档位和画幅合成真实尺寸；其他供应商保留原有 size 优先语义。
-        String ratio = StrUtil.isNotBlank(request.getSize()) && !"tokendance".equalsIgnoreCase(model.getProviderCode())
-                ? null : request.getAspectRatio();
-        return ModelCapabilityResolver.resolveImageSpec(model, request.getSize(), ratio);
+            AiModelConfigVo model, StoryboardImageGenerateRequest request, List<Long> ids, Long userId) {
+        String size = request.getSize();
+        // 固定像素尺寸继续沿用历史尺寸优先语义；1K/2K 等档位须保留独立的画幅。
+        if (ModelCapabilityResolver.isExplicitPixelSize(size) && !"tokendance".equalsIgnoreCase(model.getProviderCode())) {
+            return ModelCapabilityResolver.resolveImageSpec(model, size, null);
+        }
+        String ratio = request.getAspectRatio();
+        if (StrUtil.isBlank(ratio) && !Boolean.FALSE.equals(model.getSupportsAspectRatio())) {
+            AidStoryboard first = aidStoryboardService.getOne(Wrappers.<AidStoryboard>lambdaQuery()
+                    .select(AidStoryboard::getProjectId)
+                    .in(AidStoryboard::getId, ids)
+                    .eq(AidStoryboard::getUserId, userId)
+                    .eq(AidStoryboard::getDelFlag, DEL_FLAG_NORMAL)
+                    .orderByAsc(AidStoryboard::getId)
+                    .last("limit 1"), false);
+            if (first != null) {
+                AidComicProject project = aidComicProjectService.getOne(Wrappers.<AidComicProject>lambdaQuery()
+                        .select(AidComicProject::getAspectRatio)
+                        .eq(AidComicProject::getId, first.getProjectId())
+                        .eq(AidComicProject::getUserId, userId)
+                        .eq(AidComicProject::getDelFlag, DEL_FLAG_NORMAL)
+                        .last("limit 1"), false);
+                if (project != null) {
+                    ratio = project.getAspectRatio();
+                }
+            }
+        }
+        return ModelCapabilityResolver.resolveImageSpec(model, size, ratio);
     }
 
     /** 分镜 ID 列表去重 + 基础非空校验 + 批量规模上限。 */
@@ -509,6 +548,10 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
                                 AidStoryboard::getEpisodeId,
                                 AidStoryboard::getUserId,
                                 AidStoryboard::getImagePrompt,
+                                AidStoryboard::getScriptImageReferences,
+                                AidStoryboard::getImagePromptReferences,
+                                AidStoryboard::getUpdateTime,
+                                AidStoryboard::getStoryScript,
                                 AidStoryboard::getDelFlag)
                         .eq(AidStoryboard::getId, storyboardId)
                         .last("limit 1"),
@@ -532,6 +575,7 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
         final AidStoryboard storyboard;
         final String finalPrompt;
         final String rawImagePrompt;
+        String imagePromptReferences;
         final List<String> referenceImages;
         final String referenceManifestJson;
         final String userImagePromptInput;
@@ -569,7 +613,29 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
                                      String userInputText, Long userId, int perShotCount,
                                      AiModelConfigVo modelConfig, boolean applyReferenceEnable)
     {
+        return prepareShot(sb, single, inputImagePrompt, userInputText, userId, perShotCount, modelConfig,
+                applyReferenceEnable, null);
+    }
+
+    private PreparedShot prepareShot(AidStoryboard sb, boolean single, String inputImagePrompt,
+                                     String userInputText, Long userId, int perShotCount,
+                                     AiModelConfigVo modelConfig, boolean applyReferenceEnable,
+                                     List<StoryboardImageReference> submittedReferences)
+    {
         String imagePrompt = resolveImagePrompt(single ? inputImagePrompt : null, sb);
+        var bindings = single && submittedReferences != null ? submittedReferences
+                : StoryboardImageBindings.read(sb.getImagePromptReferences());
+        if (bindings == null || (single && submittedReferences == null && StrUtil.isNotBlank(inputImagePrompt)
+                && !Objects.equals(inputImagePrompt, sb.getImagePrompt()))) {
+            bindings = StoryboardImageBindings.read(sb.getScriptImageReferences());
+            if (bindings != null && !bindings.isEmpty()) {
+                return prepareBoundShot(sb, imagePrompt, inputImagePrompt, userInputText, perShotCount, modelConfig,
+                        bindings, true);
+            }
+        } else {
+            return prepareBoundShot(sb, imagePrompt, single ? inputImagePrompt : null, userInputText, perShotCount,
+                    modelConfig, bindings, false);
+        }
         Map<Integer, String> refNameByN = parseAtReferences(imagePrompt);
         List<Long> additionallyEnabledIds = List.of();
         if (CollectionUtil.isNotEmpty(refNameByN))
@@ -640,6 +706,30 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
         String userImagePromptInput = single ? inputImagePrompt : null;
         return new PreparedShot(sb, finalPrompt, imagePrompt, referenceImages, referenceManifestJson,
                 userImagePromptInput, perShotCount);
+    }
+
+    private PreparedShot prepareBoundShot(AidStoryboard storyboard, String imagePrompt, String submittedPrompt,
+            String userInputText, int count, AiModelConfigVo model, List<StoryboardImageReference> references,
+            boolean fromScript)
+    {
+        var plan = storyboardImageBindings.resolve(storyboard, imagePrompt, references, fromScript);
+        var urls = ReferenceImageLimiter.limit(plan.urls(), model, MAX_REFERENCE_IMAGES, "分镜图生成");
+        if (urls.size() < ReferenceImageLimiter.readMinFromCapabilityJson(model.getCapabilityJson())
+                || (urls.isEmpty() && Boolean.FALSE.equals(model.getSupportsTextInput()))) {
+            throw new ServiceException("请选择参考图");
+        }
+        StoryboardImageReferenceResolver.ResolveResult resolved = new StoryboardImageReferenceResolver.ResolveResult();
+        resolved.setReferenceImageUrls(urls);
+        String manifest;
+        try {
+            manifest = OBJECT_MAPPER.writeValueAsString(plan.manifest());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException("分镜参考图清单序列化失败", ex);
+        }
+        var shot = new PreparedShot(storyboard, buildFinalPrompt(plan.prompt(), resolved, userInputText),
+                plan.prompt(), urls, manifest, submittedPrompt, count);
+        shot.imagePromptReferences = StoryboardImageBindings.write(plan.saved());
+        return shot;
     }
 
     /** 把有图引用压缩为连续序号；无图引用只保留名称文本，让模型按描述自由生成。 */
@@ -802,7 +892,9 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
         {
             AidStoryboard storyboard = loadAndCheckStoryboard(storyboardId, userId);
             String prompt = resolveImagePrompt(storyboardIds.size() == 1 ? singlePrompt : null, storyboard);
-            if (CollectionUtil.isNotEmpty(parseAtReferences(prompt)))
+            if (CollectionUtil.isNotEmpty(parseAtReferences(prompt))
+                    || (storyboard.getImagePromptReferences() == null
+                        && CollectionUtil.isNotEmpty(StoryboardImageBindings.read(storyboard.getScriptImageReferences()))))
             {
                 return "image_to_image";
             }
@@ -1197,6 +1289,10 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
             Map<String, Object> a = new LinkedHashMap<>();
             a.put("storyboardId", ps.storyboard.getId());
             a.put("takeCount", ps.takeCount);
+            a.put("finalPrompt", ps.finalPrompt);
+            a.put("rawImagePrompt", ps.rawImagePrompt);
+            a.put("referenceImages", ps.referenceImages);
+            a.put("referenceManifestJson", ps.referenceManifestJson);
             allShotsSnapshot.add(a);
         }
 
@@ -1235,7 +1331,12 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
         task.setDelFlag(DEL_FLAG_NORMAL);
         task.setCreateTime(DateUtils.getNowDate());
         task.setCreateBy(String.valueOf(userId));
-        extractTaskService.save(task);
+        transactionTemplate.executeWithoutResult(transaction -> {
+            for (PreparedShot shot : prepared) {
+                if (StrUtil.isNotBlank(shot.userImagePromptInput)) saveSubmittedPrompt(shot, userId);
+            }
+            if (!extractTaskService.save(task)) throw new ServiceException("提交失败，请重试");
+        });
         Long taskId = task.getId();
 
         boolean enqueued;
@@ -1288,6 +1389,24 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
         items.addAll(rejected);
         vo.setItems(items);
         return vo;
+    }
+
+    private void saveSubmittedPrompt(PreparedShot shot, Long userId)
+    {
+        AidStoryboard storyboard = shot.storyboard;
+        var update = Wrappers.<AidStoryboard>lambdaUpdate()
+                .eq(AidStoryboard::getId, storyboard.getId())
+                .eq(AidStoryboard::getUserId, userId)
+                .eq(AidStoryboard::getDelFlag, DEL_FLAG_NORMAL)
+                .set(AidStoryboard::getImagePrompt, shot.rawImagePrompt)
+                .set(AidStoryboard::getImagePromptReferences, shot.imagePromptReferences)
+                .set(AidStoryboard::getUpdateTime, DateUtils.getNowDate())
+                .set(AidStoryboard::getUpdateBy, String.valueOf(userId));
+        if (storyboard.getUpdateTime() == null) update.isNull(AidStoryboard::getUpdateTime);
+        else update.eq(AidStoryboard::getUpdateTime, storyboard.getUpdateTime());
+        if (storyboard.getStoryScript() == null) update.isNull(AidStoryboard::getStoryScript);
+        else update.eq(AidStoryboard::getStoryScript, storyboard.getStoryScript());
+        if (!aidStoryboardService.update(update)) throw new ServiceException("分镜已更新，请刷新后重新生成");
     }
 
     /** 构建每镜头 ImageGenJob（共享 taskId）+ 组装 ImageBatchJob 入队。返回是否入队成功。 */
@@ -1720,6 +1839,7 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
             throw new ServiceException("重试次数超限");
         }
         LinkedHashMap<Long, Integer> takeByShot = new LinkedHashMap<>();
+        Map<Long, JsonNode> snapshotByShot = new LinkedHashMap<>();
         JsonNode allShots = input.path("allShots");
         if (!allShots.isArray() || allShots.isEmpty())
         {
@@ -1734,6 +1854,7 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
                 if (storyboardId > 0L && takeCount > 0)
                 {
                     takeByShot.put(storyboardId, takeCount);
+                    if (node.hasNonNull("finalPrompt")) snapshotByShot.put(storyboardId, node);
                 }
             }
         }
@@ -1799,8 +1920,17 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
                 continue;
             }
             AidStoryboard storyboard = loadAndCheckStoryboard(entry.getKey(), userId);
-            shots.add(prepareShot(storyboard, false, null, userInputText,
-                    userId, remaining, modelConfig, false));
+            JsonNode snapshot = snapshotByShot.get(entry.getKey());
+            if (snapshot == null) {
+                shots.add(prepareShot(storyboard, false, null, userInputText,
+                        userId, remaining, modelConfig, false));
+                continue;
+            }
+            List<String> references = new ArrayList<>();
+            snapshot.path("referenceImages").forEach(node -> references.add(node.asText()));
+            shots.add(new PreparedShot(storyboard, snapshot.path("finalPrompt").asText(),
+                    snapshot.path("rawImagePrompt").asText(), references,
+                    snapshot.path("referenceManifestJson").asText(null), null, remaining));
         }
         if (shots.isEmpty())
         {
@@ -1878,6 +2008,7 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
 
         // 镜头全集：以稳定的 allShots 为准，老快照回退 shots
         java.util.LinkedHashMap<Long, Integer> origTakeByShot = new java.util.LinkedHashMap<>();
+        Map<Long, JsonNode> frozenShots = new LinkedHashMap<>();
         JsonNode allShotsNode = input.path("allShots");
         if (!allShotsNode.isArray() || allShotsNode.isEmpty())
         {
@@ -1889,7 +2020,10 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
             {
                 long sid = an.path("storyboardId").asLong(0);
                 int tc = an.path("takeCount").asInt(0);
-                if (sid > 0 && tc > 0) { origTakeByShot.put(sid, tc); }
+                if (sid > 0 && tc > 0) {
+                    origTakeByShot.put(sid, tc);
+                    if (an.hasNonNull("finalPrompt")) frozenShots.put(sid, an);
+                }
             }
         }
         if (origTakeByShot.isEmpty())
@@ -2037,6 +2171,10 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
                     {
                         throw new ServiceException("任务数据变化");
                     }
+                    if (frozenShots.containsKey(id)) {
+                        prepared.add(ps);
+                        continue;
+                    }
                     PreparedShot applied = prepareShot(
                             resumeStoryboards.get(id), false, null, userInputF,
                             userId, remain, modelConfig, true);
@@ -2080,6 +2218,7 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
             newSnap.put("storyboardIds", resumeIds);
             newSnap.put("agentCode", agentCode);
             newSnap.put("modelCode", resolvedModelCode);
+            newSnap.put("capabilityCode", modelConfig.getCapabilityCode());
             newSnap.put("aspectRatio", aspectRatio);
             newSnap.put("size", size);
             newSnap.put("negativePrompt", negativePrompt);
@@ -2087,9 +2226,14 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
             newSnap.put("countPerShot", perShotCount);
             newSnap.put("overwriteExistingFinal", overwriteExistingFinal);
             newSnap.put("shots", resumeShots);
-            List<Map<String, Object>> allShotsOut = new ArrayList<>();
+            List<Object> allShotsOut = new ArrayList<>();
             for (Map.Entry<Long, Integer> e : origTakeByShot.entrySet())
             {
+                JsonNode frozen = frozenShots.get(e.getKey());
+                if (frozen != null) {
+                    allShotsOut.add(frozen);
+                    continue;
+                }
                 Map<String, Object> a = new LinkedHashMap<>();
                 a.put("storyboardId", e.getKey());
                 a.put("takeCount", e.getValue());
@@ -2294,6 +2438,7 @@ public class StoryboardImageGenerationServiceImpl implements IStoryboardImageGen
         if (StrUtil.isNotBlank(referenceManifestJson))
         {
             options.put("referenceManifest", referenceManifestJson);
+            request.setStoredReferenceImages(storyboardImageBindings.storedReferences(referenceManifestJson, referenceImages));
         }
         if (StrUtil.isNotBlank(aspectRatio))
         {

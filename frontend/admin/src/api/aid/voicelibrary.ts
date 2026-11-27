@@ -125,46 +125,10 @@ export function listAudioModels(query) {
 }
 
 
-// ==================== 远程音色同步（v2.39.0 新增，当前仅 MiniMax 支持） ====================
-
-// 按模型 id 触发全量远程同步（旧接口保留兼容）
-export function syncVoiceLibrary(modelId: number) {
-  return request({
-    url: '/aid/voice-library/sync/' + modelId,
-    method: 'post'
-  })
-}
-
-// 拉取远程音色列表（不入库，仅供前端展示选择）
-export function fetchRemoteVoices(modelId: number) {
-  return request({
-    url: '/aid/voice-library/sync/fetch-remote/' + modelId,
-    method: 'post'
-  })
-}
-
-// 按用户选择同步音色（多选入库 + 取消选择的软删）
-export function applySyncSelected(data: { modelId: number; selectedVoiceCodes: string[]; removedVoiceCodes: string[] }) {
-  return request({
-    url: '/aid/voice-library/sync/apply',
-    method: 'post',
-    data
-  })
-}
-
-// 清除过期音色（offline_time ≤ NOW() 的活跃音色批量软删）
-export function cleanExpiredVoices() {
-  return request({
-    url: '/aid/voice-library/clean-expired',
-    method: 'post'
-  })
-}
-
 // ==================== 通用音色工作台 ====================
 
 export type VoiceWorkbenchOperation =
   | 'SYNTHESIZE'
-  | 'REGISTER_CLONE'
   | 'REFERENCE_CLONE'
   | 'DESIGN'
 
